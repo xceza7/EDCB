@@ -69,6 +69,11 @@ Readme.txt、Readme_EpgDataCap_Bon.txt、Readme_EpgTimer.txtは基本的に人�
       得するかどうか設定します。
     ・TS解析後に取得する【追加】
       EPGデータの取得・解析を行うタイミングを遅らせます。
+    ・ロゴデータを保存する【追加】
+      PNG形式のロゴデータをLogoDataフォルダに保存します。
+      ・取得するロゴタイプ
+        サイズが異なるタイプ0～5の各ロゴのどれを取得するかフラグ(1+2+4+8+16+32)
+        で指定します。既定値は32(タイプ5のみ取得)です。
   ●ネットワーク設定タブ
     IPv6アドレスも使用できます【追加】。
     ・TCP送信
@@ -595,10 +600,10 @@ Write_Defaultの通常のファイル出力に平行して、出力と同じデ�
 ・Tee読み込み遅延(byte) : コマンドへの入力をファイル出力からこの値だけ遅らせる
 
 ◇予約ファイル等のByteOrderMark付きUTF-8対応について【追加】
-予約ファイル等(EpgAutoAdd.txt, ManualAutoAdd.txt, RecInfo.txt, RecInfo2.txt,
-Reserve.txt)をメモ帳などを使って「文字コード:UTF-8(BOM付き)」に変換すると、以後
-この形式で読み書きします。変換はEpgTimerSrv.exeを終了させてから行ってください。
-番組名などにUnicode文字を含めても文字化けせずに扱えるようになります。
+予約ファイル等(*.ChSet4.txt, ChSet5.txt, EpgAutoAdd.txt, ManualAutoAdd.txt,
+RecInfo.txt, RecInfo2.txt, Reserve.txt)をメモ帳などを使って「文字コード:UTF-8(
+BOM付き)」に変換すると、以後この形式で読み書きします。変換はEpgTimerSrv.exeを終
+了させてから行ってください。
 ※これらのファイルを直接参照する外部ツールは利用できない可能性が高くなります。
 ※ファイル新規作成時の既定をUTF-8にしました。外部ツールに問題が出る場合は上記の
 手順で「文字コード:ANSI」に戻してください。
