@@ -101,7 +101,7 @@ if v then
       if ff then
         if vtag==i*2 or vtag==i*2+1 then
           if vtag%2==0 then
-            ct:Append('<input id="input-file" type="file" accept="video/*">')
+            ct:Append('<div><input id="input-file" type="file" accept="video/*">'..(ext=='' and '(filename:'..mg.md5(ref:upper()):sub(27)..')' or '')..'</div>')
           end
           ct:Append(VideoWrapperBegin()
             ..'<video id="video" autoplay playsinline controls '..(vtag%2==0 and 'data-' or '')..'src="'..PathToRoot()..mg.url_encode(ref..ext):gsub('%%2f','/')..'">/'..EdcbHtmlEscape(ref..ext)

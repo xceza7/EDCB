@@ -62,7 +62,7 @@ function runCCInfoScript(uri,withProgress,seekVideo,seekTarget){
     if(!cb.checked||dummyVideo)return;
     dummyVideo=document.createElement("video");
     desc.innerText="Loading...";
-    function parseCue(uri){
+    function parseCue(uri,download){
       var track=document.createElement("track");
       dummyVideo.append(track);
       track.kind="metadata";
@@ -86,7 +86,7 @@ function runCCInfoScript(uri,withProgress,seekVideo,seekTarget){
           withProgress(uri);
         }
         var a=document.createElement("a");
-        a.download=withProgress?"a.vtt":"";
+        a.download=download;
         a.href=uri;
         a.innerText="(DL)";
         desc.innerText="";
@@ -133,8 +133,12 @@ function runCCInfoScript(uri,withProgress,seekVideo,seekTarget){
         if(xhr.status==200&&xhr.response){
           var s=xhr.response.replace(/\r?\n/g,"\n").replace(/\nNOTE msec=[0-9]{8}\n/g,"");
           //Validate
-          if(/^WEBVTT\n[\s\S]* --> /.test(s))parseCue(URL.createObjectURL(new Blob(["\ufeff",s],{endings:"native",type:"text/vtt"})));
-          else desc.innerText="";
+          if(/^WEBVTT\n[\s\S]* --> /.test(s)){
+            var m=(xhr.getResponseHeader("Content-Disposition")||"").match(/filename=([0-9A-Za-z_-]+\.vtt)/);
+            parseCue(URL.createObjectURL(new Blob(["\ufeff",s],{endings:"native",type:"text/vtt"})),m?m[1]:"a.vtt");
+          }else{
+            desc.innerText="";
+          }
         }else{
           desc.innerText="Error! ("+xhr.status+")";
           dummyVideo=null;
@@ -154,7 +158,7 @@ function runCCInfoScript(uri,withProgress,seekVideo,seekTarget){
       };
       xhr.send();
     }else{
-      parseCue(uri);
+      parseCue(uri,"");
     }
   };
 }

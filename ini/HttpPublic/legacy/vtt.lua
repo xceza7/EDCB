@@ -116,6 +116,7 @@ b24CaptionMagic='b24caption-2aaf6fcf-6388-4e59-88ff-46e1555d0edd'
 
 fpath=mg.get_var(mg.request_info.query_string,'fname')
 if fpath then
+  fname=mg.md5(fpath:upper()):sub(27)..'.vtt'
   fpath=DocumentToNativePath(fpath)
 end
 
@@ -145,7 +146,7 @@ if fpath then
           if code~=200 then
             code=200
             -- 高コストなので有効期限を長くする
-            if not mg.write(Response(code,mg.get_mime_type('a.vtt'),'utf-8',nil,nil,86400*7)..'\r\n') or
+            if not mg.write(Response(code,mg.get_mime_type(fname),'utf-8',nil,nil,86400*7)..'Content-Disposition: filename='..fname..'\r\n\r\n') or
                mg.request_info.request_method=='HEAD' or
                not mg.write('WEBVTT\n\nNOTE '..b24CaptionMagic..'\n'..styleTemplateVlc) then
               TerminateCommandlineLike('tsreadex',' -z edcb-vtt-legacy ')

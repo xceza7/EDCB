@@ -10,6 +10,7 @@ open=query and GetVarInt(query,'open')==1
 query=mg.request_info.query_string
 fpath=mg.get_var(query,'fname')
 if fpath then
+  fname=mg.md5(fpath:upper()):sub(27)
   fpath=DocumentToNativePath(fpath)
 end
 
@@ -222,10 +223,10 @@ if fpath then
   if hlsKey and not open and not psidata and not jikkyo then
     f=OpenTsmemsegPipe(hlsKey..'_','00')
   else
-    fname='xcode'..(fpath:match('%.[0-9A-Za-z]+$') or '')
-    fnamets='xcode'..edcb.GetPrivateProfile('SET','TSExt','.ts','EpgTimerSrv.ini')
+    ext=fpath:match('%.[0-9A-Za-z]+$') or ''
+    extts=edcb.GetPrivateProfile('SET','TSExt','.ts','EpgTimerSrv.ini')
     -- 拡張子を限定
-    if IsEqualPath(fname,fnamets) then
+    if IsEqualPath(ext,extts) then
       f=edcb.io.open(fpath,'rb')
       if f then
         if ofssec then
@@ -271,11 +272,11 @@ if fpath then
               f=nil
             end
           end
-          fname='xcode.psc.txt'
+          fname=fname..'.psc.txt'
         else
           f:close()
           f=OpenTranscoder()
-          fname='xcode.'..output[1]
+          fname=fname..'.'..output[1]
         end
       end
     end

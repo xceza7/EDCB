@@ -131,7 +131,7 @@ else
 
       if vtag==2 or vtag==3 then
         if vtag%2==0 then
-          ct:Append('<input id="input-file" type="file" accept="video/*">')
+          ct:Append('<div><input id="input-file" type="file" accept="video/*">'..(info.ists and '(filename:'..mg.md5(ref:upper()):sub(27)..')' or '')..'</div>')
         end
         ct:Append(VideoWrapperBegin()
           ..'<video id="video" autoplay playsinline controls '..(vtag%2==0 and 'data-' or '')..'src="'..PathToRoot()..mg.url_encode(ref):gsub('%%2f','/')..'">/'..EdcbHtmlEscape(ref)
@@ -205,7 +205,8 @@ else
       }
       desc.innerHTML=xhr.responseText;
       var a=document.createElement("a");
-      a.download="a.program.txt";
+      var m=(xhr.getResponseHeader("Content-Disposition")||"").match(/filename=([0-9A-Za-z_-]+\.program\.txt)/);
+      a.download=m?m[1]:"a.program.txt";
       a.href=URL.createObjectURL(new Blob(["\ufeff",desc.textContent],{endings:"native",type:"text/plain"}));
       a.innerText="(DL)";
       desc.parentElement.insertBefore(a,desc);

@@ -676,7 +676,7 @@ const runVideoScript=(aribb24UseSvg,aribb24Option,datacastMode,useJikkyoLog)=>{
   if(inputFile){
     inputFile.onchange=()=>{
       vid.e.src=URL.createObjectURL(inputFile.files[0]);
-      inputFile.parentNode.removeChild(inputFile);
+      inputFile.parentNode.parentNode.removeChild(inputFile.parentNode);
     };
   }
   let cap=null;
