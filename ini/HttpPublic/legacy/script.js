@@ -343,6 +343,9 @@ const readJikkyoLog=(text,proc,startSec,ctx)=>{
 //Global variables available after runOnscreenButtonsScript() is called.
 let vid,vcont,vfull,vwrap,setCheckLivePosition,setMinimizeJikkyo,setSendComment,hideOnscreenButtons;
 
+//Seek the video to `sec` position if possible.
+let seekVideo=(sec)=>{};
+
 const adjustVideoMaxWidth=()=>{
   if(!vwrap.style.width){
     const r=(vid.e.clientWidth>0&&vid.e.clientHeight>0?vid.e.clientWidth/vid.e.clientHeight:16/9)*window.innerHeight/window.innerWidth-
@@ -895,6 +898,9 @@ const runVideoScript=(aribb24UseSvg,aribb24Option,datacastMode,useJikkyoLog)=>{
     };
     setTimeout(onclickJikkyo,500);
   }
+  seekVideo=(sec)=>{
+    vid.e.currentTime=sec;
+  };
 };
 
 const runTranscodeScript=(useDatacast,useLiveJikkyo,useJikkyoLog,ofssec,fast,postCommentQuery)=>{
@@ -1072,18 +1078,14 @@ const runTranscodeScript=(useDatacast,useLiveJikkyo,useJikkyoLog,ofssec,fast,pos
   const voffset=document.getElementById("vid-offset");
   if(voffset){
     const vselect=document.querySelector('#vid-form select[name="offset"]');
-    const msList=[];
     const vthumb=document.querySelector("#vid-seek canvas");
     let thumbTimer=0;
     let thumbXhr=null;
-    for(let i=0;i<=100;i++){
-      msList[i]={m:vselect.options[i].textContent.match(/^(?:(\d+)m(\d\d)s)?/)};
-      msList[i].sec=msList[i].m[0]?60*msList[i].m[1]+1*msList[i].m[2]:-1;
-    }
     const rangeSeekSec=()=>{
       const n=rangeSeek.value;
       const i=Math.floor(n);
-      return i>99?msList[100].sec:msList[i].sec<0||msList[i+1].sec<0?-1:Math.floor(msList[i+1].sec*(n-i)-msList[i].sec*(n-i-1));
+      return Math.floor((vselect.options[Math.min(i+1,100)].dataset.sec||-1)*(n-i)-
+                        (vselect.options[Math.min(i,100)].dataset.sec||-1)*(n-i-1));
     };
     const formatSec=sec=>{
       return Math.floor(sec/60)+"m"+String(100+sec%60).substring(1)+"s";
@@ -1096,7 +1098,8 @@ const runTranscodeScript=(useDatacast,useLiveJikkyo,useJikkyoLog,ofssec,fast,pos
     rangeSeek.oninput=()=>{
       vseek.classList.add("active");
       vseekStatus.innerText=formatSec(ofssec+Math.floor((vid.c||vid.e).currentTime*fast))+"\u2192"+
-        (rangeSeekSec()>=0&&vid.seekWithoutTransition?formatSec(rangeSeekSec()):msList[Math.floor(rangeSeek.value)].m[0])+
+        (rangeSeekSec()>=0&&vid.seekWithoutTransition?formatSec(rangeSeekSec()):
+           vselect.options[Math.floor(rangeSeek.value)].textContent.match(/^(?:\d+m\d+s)?/).m[0])+
         "|"+Math.floor(rangeSeek.value)+"%";
       const m=vid.initSrc.match(/\?fname=[^&]*/);
       if(m&&vthumb&&vid.grabFirstFrame){
@@ -1141,7 +1144,7 @@ const runTranscodeScript=(useDatacast,useLiveJikkyo,useJikkyoLog,ofssec,fast,pos
       const sec=ofssec+Math.floor((vid.c||vid.e).currentTime*fast);
       voffset.innerText="|"+formatSec(sec);
       for(let i=0;;i++){
-        if(i==99||msList[i].sec>=sec){
+        if(i==99||(vselect.options[i].dataset.sec||-1)>=sec){
           const marker=document.querySelector("#vid-seek-marker option");
           if(vseek.classList.contains("active")){
             marker.value=Math.abs(i-rangeSeek.value)>5?i:null;
@@ -1201,6 +1204,13 @@ const runTranscodeScript=(useDatacast,useLiveJikkyo,useJikkyoLog,ofssec,fast,pos
       btnUnmute.style.display="none";
     };
   }
+  seekVideo=(sec)=>{
+    if(vid.seekWithoutTransition){
+      ofssec=Math.floor(sec);
+      openSubStream();
+      vid.seekWithoutTransition(ofssec,fastParam);
+    }
+  };
 };
 
 const runHlsScript=(aribb24UseSvg,aribb24Option,alwaysUseHls,postQuery,hlsQuery,hlsMp4Query)=>{

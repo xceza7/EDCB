@@ -43,29 +43,8 @@ partConfigSec=0.8
 -- トランスコードを開始し、HLSの場合はインデックスファイルの情報、それ以外はMP4などのストリーム自体を返す
 function OpenTranscoder(pipeName,searchName,nwtvclose,targetSID)
   if XCODE_SINGLE then
-    -- トランスコーダーの親プロセスのリストを作る
-    local pids=nil
-    if WIN32 then
-      local pf=edcb.io.popen('wmic process where "name=\'tsreadex.exe\' and commandline like \'% -z edcb-legacy-%\'" get parentprocessid 2>nul | findstr /b [1-9]')
-      if pf then
-        for pid in (pf:read('*a') or ''):gmatch('[1-9][0-9]*') do
-          pids=(pids and pids..' or ' or '')..'processid='..pid
-        end
-        pf:close()
-      end
-    end
-    -- パイプラインの上流を終わらせる
+    -- パイプラインの上流をすべて終わらせる
     TerminateCommandlineLike('tsreadex',' -z edcb-legacy-')
-    if pids then
-      -- 親プロセスの終了を2秒だけ待つ。パイプラインの下流でストールしている可能性もあるので待ちすぎない
-      -- wmicコマンドのない環境では待たないがここの待機はさほど重要ではない
-      for i=1,4 do
-        edcb.Sleep(500)
-        if i==4 or not edcb.os.execute('wmic process where "'..pids..'" get processid 2>nul | findstr /b [1-9] >nul') then
-          break
-        end
-      end
-    end
   end
 
   local tools=PathAppend(EdcbModulePath(),'Tools')

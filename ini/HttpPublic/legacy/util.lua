@@ -434,7 +434,7 @@ function TranscodeSettingTemplate(xq,forDL,fsec)
   if fsec then
     s=s..'<select name="offset">'
     for i=0,100 do
-      s=s..'<option value="'..i..'"'..Selected((xq.offset or 0)==i)..'>'
+      s=s..'<option value="'..i..'"'..Selected((xq.offset or 0)==i)..(fsec>0 and ' data-sec="'..math.floor(fsec*i/100)..'"' or '')..'>'
         ..(fsec>0 and ('%dm%02ds'):format(math.floor(fsec*i/100/60),fsec*i/100%60)..(i%5==0 and '|'..i..'%' or '') or i..'%')
     end
     s=s..'</select>\n'
@@ -465,7 +465,7 @@ end
 
 function OnscreenButtonsScriptTemplate()
   return [=[
-<script src="script.js?ver=20250907"></script>
+<script src="script.js?ver=20251011"></script>
 <script>
 runOnscreenButtonsScript();
 </script>

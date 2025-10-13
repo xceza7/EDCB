@@ -105,7 +105,7 @@ if v then
           end
           ct:Append(VideoWrapperBegin()
             ..'<video id="video" autoplay playsinline controls '..(vtag%2==0 and 'data-' or '')..'src="'..PathToRoot()..mg.url_encode(ref..ext):gsub('%%2f','/')..'">/'..EdcbHtmlEscape(ref..ext)
-            ..(ext=='' and '' or '<track id="vid-meta" kind="metadata" src="'..PathToRoot()..mg.url_encode(ref..ext):gsub('%%2f','/'):gsub('%.[0-9A-Za-z]+$','')..'.vtt" type="text/vtt" default>')
+            ..'<track id="vid-meta" kind="metadata"'..(ext=='' and '' or ' src="'..PathToRoot()..mg.url_encode(ref..ext):gsub('%%2f','/'):gsub('%.[0-9A-Za-z]+$','')..'.vtt"')..' type="text/vtt" default>'
             ..'</video>'..VideoWrapperEnd()..'\n'..VideoScriptTemplate(ext==''))
         else
           ct:Append((ext=='' and '' or '<a href="recinfodesc.html?id='..v.id..'&amp;vtag='..(i*2+1)..'">')
@@ -153,6 +153,16 @@ if v then
               ct:Append(HlsScriptTemplate('xcode.lua'))
             end
           end
+          ct:Append([=[
+<div style="display:none"><label><input type="checkbox" id="cb-ccinfo">字幕リスト</label>
+<div id="ccinfo-desc" style="display:none"></div></div>
+<script type="text/javascript" src="ccinfo_script.js"></script>
+<script type="text/javascript">
+runCCInfoScript("]=]..'vtt.lua?fname='..mg.url_encode(ref)..'",'
+  ..((vtag==i*2 or vtag==i*2+1) and 'function(uri){document.getElementById("vid-meta").src=uri;}' or 'true')
+  ..((vtag==1 or vtag==i*2 or vtag==i*2+1) and ',seekVideo,"#vid-wrap"' or ',seekVideoByFormSelect,"#vid-form"')..[=[);
+</script>
+]=])
         else
           ct:Append((vtag~=i*2 and vtag~=i*2+1 and '\n[<a href="mux_to_ts.lua?fname='..mg.url_encode(ref..ext)..'" download>Mux-to-TS</a>]' or '')
             ..' ('..math.floor(ff.size/1048576)..'M)<br>\n')
