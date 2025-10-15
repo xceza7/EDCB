@@ -170,7 +170,7 @@ else
         if vtag==1 then
           src='xcode.lua?fname='..mg.url_encode(ref)..ConstructTranscodeQueries(xq)
           ct:Append('\n'..VideoWrapperBegin()
-            ..(xq.tslive and '<canvas id="video" data-src="'..src..'"></canvas>' or
+            ..(xq.tslive and '<canvas id="video" data-pausable="1" data-src="'..src..'"></canvas>' or
                  '<video id="video" autoplay playsinline controls '..(ALLOW_HLS and 'data-' or '')..'src="'..src..'">xcode</video>')
             ..VideoWrapperEnd()..'\n'..TranscodeScriptTemplate(false,xq.caption,xq.jikkyo,{ofssec=fsec*(xq.offset or 0)/100,fast=xq.fast}))
           if xq.tslive then

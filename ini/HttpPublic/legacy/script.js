@@ -903,12 +903,13 @@ const runVideoScript=(aribb24UseSvg,aribb24Option,datacastMode,useJikkyoLog)=>{
   };
 };
 
-const runTranscodeScript=(useDatacast,useLiveJikkyo,useJikkyoLog,ofssec,fast,postCommentQuery)=>{
+const runTranscodeScript=(useDatacast,useLiveJikkyo,useJikkyoLog,postCommentQuery)=>{
+  let currentAbsTime;
   if(vid.c){
     //Playback rate is controlled on client-side.
-    vid.fast=fast;
-    fast=1;
+    currentAbsTime=()=>vid.ofssec+Math.floor(vid.c.currentTime);
   }else{
+    currentAbsTime=()=>vid.ofssec+Math.floor(vid.e.currentTime*vid.fast);
     if(vid.e.controlsList)vid.e.controlsList.add("noplaybackrate");
     if(window.createMiscWasmModule){
       setTimeout(()=>{
@@ -963,7 +964,7 @@ const runTranscodeScript=(useDatacast,useLiveJikkyo,useJikkyoLog,ofssec,fast,pos
   };
   window.addEventListener("load",adjustSeekbarWidth);
   window.addEventListener("resize",adjustSeekbarWidth);
-  let fastParam="";
+  vid.fastParam="";
   let openSubStream=()=>{};
   if(useDatacast||useLiveJikkyo||useJikkyoLog){
     let onDataStream=null;
@@ -986,8 +987,8 @@ const runTranscodeScript=(useDatacast,useLiveJikkyo,useJikkyoLog,ofssec,fast,pos
         let readCount=0;
         const ctx={};
         xhr=new XMLHttpRequest();
-        xhr.open("GET",(fastParam?vid.initSrc.replace(/&fast=[^&]*/,"")+fastParam:vid.initSrc)+(onDataStream?"&psidata=1":"")+
-                 (onJikkyoStream?"&jikkyo=1":"")+"&ofssec="+(ofssec+Math.floor((vid.c||vid.e).currentTime*fast)));
+        xhr.open("GET",(vid.fastParam?vid.initSrc.replace(/&fast=[^&]*/,"")+vid.fastParam:vid.initSrc)+(onDataStream?"&psidata=1":"")+
+                 (onJikkyoStream?"&jikkyo=1":"")+"&ofssec="+currentAbsTime());
         xhr.onloadend=()=>{
           if(xhr&&(readCount==0||xhr.status!=0)){
             if(onDataStreamError)onDataStreamError(xhr.status,readCount);
@@ -1097,7 +1098,7 @@ const runTranscodeScript=(useDatacast,useLiveJikkyo,useJikkyoLog,ofssec,fast,pos
     };
     rangeSeek.oninput=()=>{
       vseek.classList.add("active");
-      vseekStatus.innerText=formatSec(ofssec+Math.floor((vid.c||vid.e).currentTime*fast))+"\u2192"+
+      vseekStatus.innerText=formatSec(currentAbsTime())+"\u2192"+
         (rangeSeekSec()>=0&&vid.seekWithoutTransition?formatSec(rangeSeekSec()):
            vselect.options[Math.floor(rangeSeek.value)].textContent.match(/^(?:\d+m\d+s)?/).m[0])+
         "|"+Math.floor(rangeSeek.value)+"%";
@@ -1132,16 +1133,16 @@ const runTranscodeScript=(useDatacast,useLiveJikkyo,useJikkyoLog,ofssec,fast,pos
     rangeSeek.onchange=()=>{
       vselect.options[Math.floor(rangeSeek.value)].selected=true;
       if(rangeSeekSec()>=0&&vid.seekWithoutTransition){
-        ofssec=rangeSeekSec();
+        vid.ofssec=rangeSeekSec();
         openSubStream();
-        vid.seekWithoutTransition(ofssec,fastParam);
+        vid.seekWithoutTransition();
         vseek.classList.remove("active");
       }else{
         document.querySelector('#vid-form button[type="submit"]').click();
       }
     };
     (vid.c||vid.e).ontimeupdate=()=>{
-      const sec=ofssec+Math.floor((vid.c||vid.e).currentTime*fast);
+      const sec=currentAbsTime();
       voffset.innerText="|"+formatSec(sec);
       for(let i=0;;i++){
         if(i==99||(vselect.options[i].dataset.sec||-1)>=sec){
@@ -1157,18 +1158,17 @@ const runTranscodeScript=(useDatacast,useLiveJikkyo,useJikkyoLog,ofssec,fast,pos
         }
       }
     };
-    voffset.innerText="|"+formatSec(ofssec);
+    voffset.innerText="|"+formatSec(vid.ofssec);
   }
   const vfast=document.querySelector('#vid-form select[name="fast"]');
   if(vfast){
     vfast.onchange=()=>{
       if(vfast.selectedIndex>=0&&vid.seekWithoutTransition){
-        ofssec+=Math.floor((vid.c||vid.e).currentTime*fast);
-        fastParam="&fast="+vfast.options[vfast.selectedIndex].value;
-        const fastRate=1*vfast.options[vfast.selectedIndex].textContent.substring(1);
-        if(!vid.c)fast=fastRate;
+        vid.ofssec=currentAbsTime();
+        vid.fastParam="&fast="+vfast.options[vfast.selectedIndex].value;
+        vid.fast=1*vfast.options[vfast.selectedIndex].textContent.substring(1);
         openSubStream();
-        vid.seekWithoutTransition(ofssec,fastParam,fastRate);
+        vid.seekWithoutTransition();
       }
     };
   }
@@ -1190,10 +1190,10 @@ const runTranscodeScript=(useDatacast,useLiveJikkyo,useJikkyoLog,ofssec,fast,pos
       }
     };
     let swtCount=0;
-    vid.seekWithoutTransition=(ofssec,fastParam)=>{
+    vid.seekWithoutTransition=()=>{
       vid.fixSizeThenUnfixOnPlay();
       //"count" is to ensure that the src attribute is reloaded.
-      vid.e.src=(fastParam?vid.initSrc.replace(/&fast=[^&]*/,"")+fastParam:vid.initSrc).replace("&load=","&reload=")+"&ofssec="+ofssec+"&count="+(++swtCount);
+      vid.e.src=(vid.fastParam?vid.initSrc.replace(/&fast=[^&]*/,"")+vid.fastParam:vid.initSrc).replace("&load=","&reload=")+"&ofssec="+vid.ofssec+"&count="+(++swtCount);
     };
   }
   if((vid.c||vid.e).muted){
@@ -1206,9 +1206,9 @@ const runTranscodeScript=(useDatacast,useLiveJikkyo,useJikkyoLog,ofssec,fast,pos
   }
   seekVideo=(sec)=>{
     if(vid.seekWithoutTransition){
-      ofssec=Math.floor(sec);
+      vid.ofssec=Math.floor(sec);
       openSubStream();
-      vid.seekWithoutTransition(ofssec,fastParam);
+      vid.seekWithoutTransition();
     }
   };
 };
@@ -1267,11 +1267,11 @@ const runHlsScript=(aribb24UseSvg,aribb24Option,alwaysUseHls,postQuery,hlsQuery,
           }
         });
         let swtCount=0;
-        const swt=(ofssec,fastParam)=>{
+        const swt=()=>{
           vid.seekWithoutTransition=null;
           vid.fixSizeThenUnfixOnPlay();
           hls.detachMedia();
-          waitForHlsStart((fastParam?vid.initSrc.replace(/&fast=[^&]*/,"")+fastParam:vid.initSrc).replace("&load=","&reload=")+"&ofssec="+ofssec+
+          waitForHlsStart((vid.fastParam?vid.initSrc.replace(/&fast=[^&]*/,"")+vid.fastParam:vid.initSrc).replace("&load=","&reload=")+"&ofssec="+vid.ofssec+
             //Excludes Firefox for Android, because playback of non-keyframe fragmented MP4 is jerky.
             hlsQuery.replace("&hls=","&hls="+(++swtCount)+"_")+(/Android.+Firefox/i.test(navigator.userAgent)?"":hlsMp4Query),postQuery,200,500,()=>{vid.e.poster=null;},src=>{
             hls.loadSource(src);
@@ -1310,10 +1310,9 @@ const runTsliveScript=(autoCinema,aribb24UseSvg,aribb24Option)=>{
   let lastWidth=vid.e.width;
   let lastHeight=vid.e.height;
   let wakeLock=null;
-  //Non-empty seekParam means that abort() has been called and the next fetch() call is pending.
-  let seekParam="";
+  let abortState="";
   const readNext=(mod,reader,ret)=>{
-    if(ret&&ret.value&&!seekParam){
+    if(ret&&ret.value&&!abortState){
       const inputLen=Math.min(ret.value.length,1e6);
       const buffer=mod.getNextInputBuffer(inputLen);
       if(!buffer){
@@ -1332,9 +1331,12 @@ const runTsliveScript=(autoCinema,aribb24UseSvg,aribb24Option)=>{
       if(r.done){
         if(wakeLock)wakeLock.release();
         vid.seekWithoutTransition=null;
-        if(seekParam){
-          mod.reset();
+        vid.e.onclick=null;
+        if(abortState=="seeking"){
           startRead(mod);
+        }else if(abortState=="paused"){
+          vid.seekWithoutTransition=()=>startRead(mod);
+          vid.e.onclick=()=>seekVideo(vid.ofssec);
         }
       }else{
         const now=Date.now();
@@ -1350,9 +1352,12 @@ const runTsliveScript=(autoCinema,aribb24UseSvg,aribb24Option)=>{
     }).catch(e=>{
       if(wakeLock)wakeLock.release();
       vid.seekWithoutTransition=null;
-      if(seekParam){
-        mod.reset();
+      vid.e.onclick=null;
+      if(abortState=="seeking"){
         startRead(mod);
+      }else if(abortState=="paused"){
+        vid.seekWithoutTransition=()=>startRead(mod);
+        vid.e.onclick=()=>seekVideo(vid.ofssec);
       }
       throw e;
     });
@@ -1381,26 +1386,44 @@ const runTsliveScript=(autoCinema,aribb24UseSvg,aribb24Option)=>{
   document.getElementById("label-caption").style.display="inline";
 
   const startRead=mod=>{
+    vid.seekWithoutTransition=null;
+    vid.e.onclick=null;
+    if(abortState=="paused"){
+      mod.resume();
+    }
+    mod.setPlaybackRate(vid.fast);
+    mod.reset();
     const ctrl=new AbortController();
     //"throttle" is to avoid excessive prefetching in some browsers.
-    fetch((seekParam.indexOf("&fast=")>=0?vid.initSrc.replace(/&fast=[^&]*/,""):vid.initSrc)+
-          seekParam+"&throttle=1",{signal:ctrl.signal}).then(response=>{
+    fetch((vid.fastParam?vid.initSrc.replace(/&fast=[^&]*/,"")+vid.fastParam:vid.initSrc)+
+          (abortState?"&ofssec="+vid.ofssec:"")+"&throttle=1",{signal:ctrl.signal}).then(response=>{
       if(!response.ok)return;
       //Reset caption
       if(cap)cap.attachMedia(null,vcont);
       vid.currentTime=0;
-      vid.seekWithoutTransition=(ofssec,fastParam,fastRate)=>{
-        if(fastRate)mod.setPlaybackRate(fastRate);
+      vid.seekWithoutTransition=()=>{
         vid.currentTime=0;
         vid.seekWithoutTransition=null;
-        seekParam="&ofssec="+ofssec+fastParam;
+        vid.e.onclick=null;
+        abortState="seeking";
         ctrl.abort();
       };
+      if(vid.e.dataset.pausable&&mod.pause){
+        vid.e.onclick=()=>{
+          vid.ofssec+=Math.floor(vid.currentTime);
+          vid.currentTime=0;
+          vid.seekWithoutTransition=null;
+          vid.e.onclick=null;
+          mod.pause();
+          abortState="paused";
+          ctrl.abort();
+        };
+      }
       readNext(mod,response.body.getReader(),null);
       //Prevent screen sleep
       navigator.wakeLock.request("screen").then(lock=>{wakeLock=lock;});
     });
-    seekParam="";
+    abortState="";
   };
   const notify=s=>{
     const ctx=vid.e.getContext("2d");
@@ -1470,7 +1493,6 @@ const runTsliveScript=(autoCinema,aribb24UseSvg,aribb24Option)=>{
             if(cbCinema.checked!=f)cbCinema.checked=f;
           }
         });
-        if(vid.fast!=1)mod.setPlaybackRate(vid.fast);
         setTimeout(()=>{
           vbitrate.innerText="|?Mbps";
           startRead(mod);

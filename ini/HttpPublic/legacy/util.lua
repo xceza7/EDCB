@@ -551,12 +551,12 @@ function TranscodeScriptTemplate(live,caption,jikkyo,params)
 <button id="vid-unmute" class="video-side-item" type="button" style="display:none">🔊</button>
 <script>
 ]=]..(XCODE_VIDEO_MUTED and '(vid.c||vid.e).muted=true;\n' or '')..(VIDEO_VOLUME and '(vid.c||vid.e).volume='..VIDEO_VOLUME..';\n' or '')..[=[
+vid.ofssec=]=]..math.floor(params.ofssec or 0)..[=[;
+vid.fast=]=]..(params.fast and params.fast~=0 and XCODE_FAST_RATES[params.fast] or 1)..[=[;
 runTranscodeScript(]=]
   ..(USE_DATACAST and 'true' or 'false')..','
   ..(live and USE_LIVEJK and 'true' or 'false')..','
   ..(not live and JKRDLOG_PATH and 'true' or 'false')..','
-  ..math.floor(params.ofssec or 0)..','
-  ..(params.fast and params.fast~=0 and XCODE_FAST_RATES[params.fast] or 1)..','
   ..'"'..(live and USE_LIVEJK and 'ctok='..CsrfToken('comment.lua')..'&n='..params.n..(params.id and '&id='..params.id or '') or '')..'"'..[=[
 );
 </script>
