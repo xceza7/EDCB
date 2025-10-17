@@ -136,7 +136,7 @@ else
         ct:Append(VideoWrapperBegin()
           ..'<video id="video" autoplay playsinline controls '..(vtag%2==0 and 'data-' or '')..'src="'..PathToRoot()..mg.url_encode(ref):gsub('%%2f','/')..'">/'..EdcbHtmlEscape(ref)
           ..'<track id="vid-meta" kind="metadata"'..(info.ists and '' or ' src="'..PathToRoot()..mg.url_encode(ref):gsub('%%2f','/'):gsub('%.[0-9A-Za-z]+$','')..'.vtt"')..' type="text/vtt" default>'
-          ..'</video>'..VideoWrapperEnd()..'\n'..VideoScriptTemplate(info.ists))
+          ..'</video>'..VideoWrapperEnd(true)..'\n'..VideoScriptTemplate(info.ists))
       else
         ct:Append((info.ists and '' or '<a href="library.html?i='..index..(#dirhash>0 and '&amp;d='..table.concat(dirhash,',') or '')..'&amp;h='..hash..'&amp;vtag=3">')
           ..'/'..EdcbHtmlEscape(ref)..(info.ists and '' or '</a>')
@@ -145,11 +145,17 @@ else
       end
       if info.ists then
         fsec,fsize=0,0
+        shiftable=false
         f=edcb.io.open(PathAppend(dir,info.name),'rb')
         if f then
           fsec,fsize=GetDurationSec(f)
           if vtag<=0 then
             thumbs=ThumbnailTemplate(f,fsec,fsize,ref)
+          end
+          if JKRDLOG_PATH and vtag==1 then
+            --終端が現在時刻よりも昔ならば実況を逐次取得する必要はないのでshiftableにする
+            tot=GetTotAndServiceID(f)
+            shiftable=tot and tot+fsec+60<os.time()
           end
           f:close()
         end
@@ -172,7 +178,7 @@ else
           ct:Append('\n'..VideoWrapperBegin()
             ..(xq.tslive and '<canvas id="video" data-pausable="1" data-src="'..src..'"></canvas>' or
                  '<video id="video" autoplay playsinline controls '..(ALLOW_HLS and 'data-' or '')..'src="'..src..'">xcode</video>')
-            ..VideoWrapperEnd()..'\n'..TranscodeScriptTemplate(false,xq.caption,xq.jikkyo,{ofssec=fsec*(xq.offset or 0)/100,fast=xq.fast}))
+            ..VideoWrapperEnd(shiftable)..'\n'..TranscodeScriptTemplate(false,xq.caption,xq.jikkyo,{ofssec=fsec*(xq.offset or 0)/100,fast=xq.fast}))
           if xq.tslive then
             ct:Append(TsliveScriptTemplate(xq.autoCinema))
           elseif ALLOW_HLS then

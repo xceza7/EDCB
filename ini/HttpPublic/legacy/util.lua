@@ -414,12 +414,9 @@ function VideoWrapperBegin()
     ..'<div class="video-container arib-video-container arib-video-container-prepend arib-video-container-tunnel-pointer" id="vid-cont">'
 end
 
-function VideoWrapperEnd()
-  return '</div><div id="jikkyo-comm" style="display:none">'
-    ..'<button type="button" onclick="shiftJikkyo(-15)">-15</button>'
-    ..'<button type="button" onclick="shiftJikkyo(-1)">-1</button>'
-    ..'<button type="button" onclick="shiftJikkyo(1)">+1</button>'
-    ..'<button type="button" onclick="shiftJikkyo(15)">+15</button>'
+function VideoWrapperEnd(shiftable)
+  return '</div><div id="jikkyo-comm"'..(shiftable and ' data-shiftable="1"' or '')..' style="display:none">'
+    ..(shiftable and table.concat({'','-15)">-15','-1)">-1','1)">+1','15)">+15',''},'</button><button type="button" onclick="shiftJikkyo('):match('>(.*)<') or '')
     ..'<div id="jikkyo-chats"></div></div></div></div>'
 end
 
@@ -508,35 +505,31 @@ function WebBmlScriptTemplate(label)
 ]=]) or ''
 end
 
-function JikkyoScriptTemplate(live,shiftable,jikkyo)
+function JikkyoScriptTemplate(live,jikkyo)
   return (live and USE_LIVEJK or not live and JKRDLOG_PATH) and [=[
 <label class="video-side-item"><input id="cb-jikkyo"]=]..Checkbox(jikkyo)..[=[>jikkyo</label>
 <label class="video-side-item enabled-on-checked"><input id="cb-jikkyo-onscr" type="checkbox" checked>scr</label>
 <script src="danmaku.js"></script>
 <script>
-runJikkyoScript(]=]..(shiftable and 'true' or 'false')..','..JK_COMMENT_HEIGHT..','..JK_COMMENT_DURATION..',function(tag){'..JK_CUSTOM_REPLACE..[=[
+runJikkyoScript(]=]..JK_COMMENT_HEIGHT..','..JK_COMMENT_DURATION..',function(tag){'..JK_CUSTOM_REPLACE..[=[
   return tag;});
 </script>
 ]=] or ''
 end
 
 function VideoScriptTemplate(ists)
-  return OnscreenButtonsScriptTemplate()..WebBmlScriptTemplate(ists and 'data' or 'data.psc')..JikkyoScriptTemplate(false,true,XCODE_CHECK_JIKKYO)..[=[
+  return OnscreenButtonsScriptTemplate()..WebBmlScriptTemplate(ists and 'data' or 'data.psc')..JikkyoScriptTemplate(false,XCODE_CHECK_JIKKYO)..[=[
 <label id="label-caption" class="video-side-item" style="display:none"><input id="cb-caption"]=]..Checkbox(XCODE_CHECK_CAPTION)..[=[>CC.vtt</label>
 <script src="aribb24.js"></script>
 <script>
 ]=]..(VIDEO_MUTED and 'vid.e.muted=true;\n' or '')..(VIDEO_VOLUME and 'vid.e.volume='..VIDEO_VOLUME..';\n' or '')..[=[
-runVideoScript(]=]
-  ..(ARIBB24_USE_SVG and 'true' or 'false')..',{'..ARIBB24_JS_OPTION..'},'
-  ..(USE_DATACAST and (ists and '2' or '1') or '0')..','
-  ..(JKRDLOG_PATH and 'true' or 'false')..[=[
-);
+runVideoScript(]=]..(ARIBB24_USE_SVG and 'true' or 'false')..',{'..ARIBB24_JS_OPTION..'}'..[=[);
 </script>
 ]=]
 end
 
 function TranscodeScriptTemplate(live,caption,jikkyo,params)
-  return OnscreenButtonsScriptTemplate()..WebBmlScriptTemplate('data')..JikkyoScriptTemplate(live,false,jikkyo)..[=[
+  return OnscreenButtonsScriptTemplate()..WebBmlScriptTemplate('data')..JikkyoScriptTemplate(live,jikkyo)..[=[
 <label id="label-caption" class="video-side-item" style="display:none"><input id="cb-caption"]=]..Checkbox(caption)..[=[>CC</label>
 ]=]..(live and '<label class="video-side-item"><input id="cb-live" type="checkbox">live</label>\n' or '')
   ..(not live and THUMBNAIL_ON_SEEK and EdcbFindFilePlain(mg.script_name:gsub('[^\\/]*$','')..'ts-live-misc.js') and [=[
@@ -553,12 +546,7 @@ function TranscodeScriptTemplate(live,caption,jikkyo,params)
 ]=]..(XCODE_VIDEO_MUTED and '(vid.c||vid.e).muted=true;\n' or '')..(VIDEO_VOLUME and '(vid.c||vid.e).volume='..VIDEO_VOLUME..';\n' or '')..[=[
 vid.ofssec=]=]..math.floor(params.ofssec or 0)..[=[;
 vid.fast=]=]..(params.fast and params.fast~=0 and XCODE_FAST_RATES[params.fast] or 1)..[=[;
-runTranscodeScript(]=]
-  ..(USE_DATACAST and 'true' or 'false')..','
-  ..(live and USE_LIVEJK and 'true' or 'false')..','
-  ..(not live and JKRDLOG_PATH and 'true' or 'false')..','
-  ..'"'..(live and USE_LIVEJK and 'ctok='..CsrfToken('comment.lua')..'&n='..params.n..(params.id and '&id='..params.id or '') or '')..'"'..[=[
-);
+runTranscodeScript("]=]..(live and USE_LIVEJK and 'ctok='..CsrfToken('comment.lua')..'&n='..params.n..(params.id and '&id='..params.id or '') or '')..[=[");
 </script>
 ]=]
 end

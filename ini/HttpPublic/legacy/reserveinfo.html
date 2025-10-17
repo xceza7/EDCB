@@ -130,7 +130,7 @@ if r then
           ct:Append(VideoWrapperBegin()
             ..'<video id="video" autoplay playsinline controls '..(vtag%2==0 and 'data-' or '')..'src="'..PathToRoot()..mg.url_encode(ref..ext):gsub('%%2f','/')..'">/'..EdcbHtmlEscape(ref..ext)
             ..'<track id="vid-meta" kind="metadata"'..(ext=='' and '' or ' src="'..PathToRoot()..mg.url_encode(ref..ext):gsub('%%2f','/'):gsub('%.[0-9A-Za-z]+$','')..'.vtt"')..' type="text/vtt" default>'
-            ..'</video>'..VideoWrapperEnd()..'\n'..VideoScriptTemplate(ext==''))
+            ..'</video>'..VideoWrapperEnd(true)..'\n'..VideoScriptTemplate(ext==''))
         else
           ct:Append((ext=='' and '' or '<a href="reserveinfo.html?id='..r.reserveID..(fromepg and '&amp;fromepg=1' or '')..'&amp;vtag='..(i*2+1)..'">')
             ..'/'..EdcbHtmlEscape(ref..ext)..(ext=='' and '' or '</a>')

@@ -765,12 +765,13 @@ th, td {
 }
 
 #jikkyo-comm > button {
-  display: none;
   margin: 0;
 }
 
-#jikkyo-comm.shiftable > button {
-  display: unset;
+#jikkyo-comm > canvas {
+  height: 1.5em;
+  vertical-align: top;
+  width: 100%;
 }
 
 #jikkyo-comm.minimized > button {
