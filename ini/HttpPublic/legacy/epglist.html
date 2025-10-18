@@ -78,8 +78,8 @@ else
   rtComp=CompareFields('eid')
   programReservedStart=BinarySearchBound(rt,{eid=65535},rtComp)
 
-  --前後2週間の番組だけ取得する
-  range={startTime=os.date('!*t',baseTime+(date-14)*24*3600),durationSecond=28*24*3600}
+  --前1+後27日間の番組だけ取得する
+  range={startTime=os.date('!*t',baseTime+(date-1)*24*3600),durationSecond=28*24*3600}
   et=edcb.EnumEventInfo({{onid=onid,tsid=tsid,sid=sid}},range) or {}
   for i,v in ipairs(edcb.EnumEventInfoArchive and edcb.EnumEventInfoArchive({{onid=onid,tsid=tsid,sid=sid}},range) or {}) do
     v.past=true
@@ -145,7 +145,7 @@ else
   end
   ct:Append('</div>\n')
   if date<0 then
-    ct:Append('<div class="page-nav">\n  <a href="epglist.html?id='..onid..'-'..tsid..'-'..sid..'&amp;date='..(date+28)..'">↓↓</a>\n</div>\n')
+    ct:Append('<div class="page-nav">\n  <a href="epglist.html?id='..onid..'-'..tsid..'-'..sid..(date<-28 and '&amp;date='..(date+28) or '')..'">↓↓</a>\n</div>\n')
   end
 end
 

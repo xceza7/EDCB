@@ -626,8 +626,7 @@ function ConvertProgramText(v)
     s=s..'\n'..((v.shortInfo and v.shortInfo.event_name or ''):gsub('\r',''):gsub('^\n+','')..'\n'):gsub('\n\n+','\n')..'\n'
       ..DecorateUri(((v.shortInfo and v.shortInfo.text_char or ''):gsub('\r',''):gsub('^\n+','')..'\n'):gsub('\n\n+','\n'))..'\n'
     if v.extInfo then
-      s=s..'<small>詳細情報</small>'..DecorateUri(('\n'..(v.extInfo.text_char:gsub('\r',''):gsub('^\n+','')..'\n\n'):gsub('\n\n\n+','\n\n'))
-          :gsub('\n%- ([^\n]*)','\n<span class="escape-text">- </span><b>%1</b>'))..'\n'
+      s=s..'詳細情報\n'..(v.extInfo.text_char:gsub('\r',''):gsub('^\n+','')..'\n\n'):gsub('\n\n\n+','\n\n')..'\n'
     end
     if v.contentInfoList then
       s=s..'ジャンル : \n'
@@ -675,6 +674,29 @@ function ConvertProgramText(v)
       ..('EventID:%d(0x%04X)\n'):format(v.eid,v.eid)
   end
   return s
+end
+
+--番組情報の文字列をタグ装飾する
+function DecorateProgramText(s)
+  s=s:gsub('\r?\n','\n')
+  --日時とサービス名と番組名をスキップ
+  local i,j=s:find('^[^\n]*\n[^\n]*\n.-\n\n')
+  if i then
+    --番組内容を装飾
+    i,j=s:find('^.-\n\n',j+1)
+    if i then
+      local t=DecorateUri(s:sub(i,j))
+      s=s:sub(1,i-1)..t..s:sub(j+1)
+      --詳細情報があれば装飾
+      i,j=s:find('^詳細情報\n.-\n\n\n',i+#t)
+      if i then
+        s=s:sub(1,i-1)..'<small>詳細情報</small>'
+          ..DecorateUri(s:sub(i+12,j):gsub('\n%- ([^\n]*)','\n<span class="escape-text">- </span><b>%1</b>'))
+          ..s:sub(j+1)
+      end
+    end
+  end
+  return s:gsub('\n','<br>\n')
 end
 
 --録画設定フォームのテンプレート

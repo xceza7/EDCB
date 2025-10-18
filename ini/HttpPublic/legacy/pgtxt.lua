@@ -82,7 +82,7 @@ if code==200 then
   ct=CreateContentBuilder(GZIP_THRESHOLD_BYTE)
   -- 装飾済みで返す
   edcb.htmlEscape=15
-  ct:Append(DecorateUri(EdcbHtmlEscape(s)):gsub('\r?\n','<br>\n'))
+  ct:Append(DecorateProgramText(EdcbHtmlEscape(s)))
   ct:Finish()
   mg.write(ct:Pop(Response(200,mg.get_mime_type(fname),'utf-8',ct.len,ct.gzip)..'Content-Disposition: filename='..fname..'\r\n\r\n'))
 else

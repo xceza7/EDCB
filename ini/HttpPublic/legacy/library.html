@@ -15,7 +15,8 @@ ct:Append((vtag<=0 and DOCTYPE_HTML4_STRICT or '<!DOCTYPE html>\n')..[=[
 ]=])
 
 dirname=nil
-index=GetVarInt(mg.request_info.query_string,'i',1,#LIBRARY_LIST)
+--フォルダが1つのときはライブラリリストを省略
+index=#LIBRARY_LIST==1 and 1 or GetVarInt(mg.request_info.query_string,'i',1,#LIBRARY_LIST)
 if index then
   dir=DocumentToNativePath(LIBRARY_LIST[index])
   if dir then
@@ -48,7 +49,7 @@ end
 thumbs={''}
 queryParent=''
 if not dirname then
-  ct:Append('<h1>ライブラリ</h1>\n<div class="nav"><ul>\n')
+  ct:Append('<h1>ライブラリリスト</h1>\n<div class="nav"><ul>\n')
   edcb.htmlEscape=15
   for i,v in ipairs(LIBRARY_LIST) do
     ct:Append('<li><a href="library.html?i='..i..'">'..EdcbHtmlEscape(v)
@@ -96,7 +97,9 @@ else
       table.sort(ff,function(a,b) return a.name>b.name end)
     end
     edcb.htmlEscape=15
-    ct:Append('<tr><td><td><td><a href="library.html'..queryParent..'">Parent directory of</a> /'..EdcbHtmlEscape(dirname)..'/</tr>\n')
+    ct:Append('<tr><td><td><td>'
+      ..(#LIBRARY_LIST==1 and queryParent=='' and '/'..EdcbHtmlEscape(dirname)..'/ [<a href="'..PathToRoot()..mg.url_encode(dirname):gsub('%%2f','/')..'">index</a>]'
+           or '<a href="library.html'..queryParent..'">Parent directory of</a> /'..EdcbHtmlEscape(dirname)..'/')..'</tr>\n')
     for i,v in ipairs(ff) do
       v.mtime.sec=0
       ct:Append('<tr><td>'..FormatTimeAndDuration(v.mtime)
@@ -238,7 +241,7 @@ end
 
 ct:Append([=[
 <div id="footer">
-  <a href="]=]..(index and 'library.html">ライブラリリスト' or 'index.html">メニュー')..[=[</a>
+  <a href="]=]..(#LIBRARY_LIST~=1 and index and 'library.html">ライブラリリスト' or 'index.html">メニュー')..[=[</a>
 ]=]..(queryParent~='' and '  <a href="library.html'..queryParent..'">Parent_directory..</a>\n' or '')..[=[
 </div>
 ]=])
