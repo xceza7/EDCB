@@ -35,6 +35,8 @@ if hlsKey and not (ALLOW_HLS and option.outputHls) then
 end
 psidata=GetVarInt(query,'psidata')==1
 jikkyo=GetVarInt(query,'jikkyo')==1
+jkID=GetVarInt(query,'jkid',1,65535)
+jkTM=GetVarInt(query,'jktm',1)
 reload=mg.get_var(query,'reload')
 loadKey=reload or mg.get_var(query,'load') or ''
 
@@ -148,9 +150,9 @@ function OpenPsiDataArchiver()
   return edcb.io.popen(WIN32 and '"'..cmd..'"' or cmd,'r'..POPEN_BINARY)
 end
 
-function OpenJikkyoReader(tot,nid,sid)
+function OpenJikkyoReader(tot,jkID,nid,sid)
   if JKRDLOG_PATH then
-    local jkID=GetJikkyoID(nid,sid)
+    jkID=jkID or GetJikkyoID(nid,sid)
     if not jkID then
       return 'Unable to determine Jikkyo ID.'
     end
@@ -266,7 +268,7 @@ if fpath then
             end
           end
           if f and jikkyo then
-            f.jk=tot and OpenJikkyoReader(tot,nid,sid)
+            f.jk=tot and OpenJikkyoReader(jkTM or tot,jkID,nid,sid)
             if not f.jk then
               if f.psi then f.psi:close() end
               f=nil

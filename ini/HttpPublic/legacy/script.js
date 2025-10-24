@@ -939,6 +939,10 @@ const runVideoScript=(aribb24UseSvg,aribb24Option)=>{
       };
       readTimer=setTimeout(read,200);
     };
+    const selectID=document.querySelector('#jikkyo-config > select[name="id"]');
+    const inputTM=document.querySelector('#jikkyo-config > input[name="tm"]');
+    const inputTMSec=document.querySelector('#jikkyo-config > select[name="tmsec"]');
+    let jkID=0,jkTM=0;
     let xhr=null;
     const onclickJikkyo=()=>{
       cbJikkyo.onclick=onclickJikkyo;
@@ -952,7 +956,7 @@ const runVideoScript=(aribb24UseSvg,aribb24Option)=>{
       startRead();
       if(xhr)return;
       xhr=new XMLHttpRequest();
-      xhr.open("GET","jklog.lua?fname="+vid.initSrc.replace(/^(?:\.\.\/)+/,""));
+      xhr.open("GET","jklog.lua?fname="+vid.initSrc.replace(/^(?:\.\.\/)+/,"")+"&jkid="+jkID+"&jktm="+jkTM);
       xhr.onloadend=()=>{
         if(!logText){
           if(onJikkyoStreamError)onJikkyoStreamError(xhr.status,0);
@@ -961,14 +965,37 @@ const runVideoScript=(aribb24UseSvg,aribb24Option)=>{
       xhr.onload=()=>{
         if(xhr.status!=200||!xhr.response)return;
         logText=xhr.response;
+        const m=logText.match(/^<!-- J=([0-9]+);T=([0-9]+)/);
+        if(m){
+          for(const opt of selectID.options){
+            if(opt.value==m[1]){
+              opt.selected=true;
+              break;
+            }
+          }
+          inputTM.value=new Date(1000*m[2]+32400000).toISOString().substring(0,16);
+          inputTMSec.options[m[2]%60].selected=true;
+        }
+        const comm=document.getElementById("jikkyo-comm");
+        if(stats&&stats.canvas){
+          comm.removeChild(stats.canvas);
+        }
         stats=getJikkyoLogStats(logText);
         drawStatsGraph(stats);
         if(stats.canvas){
-          const comm=document.getElementById("jikkyo-comm");
           comm.insertBefore(stats.canvas,comm.firstChild);
         }
       };
       xhr.send();
+    };
+    const btnConfig=document.querySelector("#jikkyo-config > button");
+    btnConfig.onclick=selectID.onchange=()=>{
+      if(xhr&&xhr.readyState!=4)return;
+      jkID=+(selectID.value||"0");
+      jkTM=inputTM.value?Math.floor(Date.parse(inputTM.value+"Z")/60000)*60+inputTMSec.selectedIndex-32400:0;
+      logText=null;
+      xhr=null;
+      onclickJikkyo();
     };
     setTimeout(onclickJikkyo,500);
   }
@@ -1041,6 +1068,9 @@ const runTranscodeScript=(postCommentQuery)=>{
   vid.fastParam="";
   let openSubStream=()=>{};
   const cbJikkyo=document.getElementById("cb-jikkyo");
+  const selectID=document.querySelector('#jikkyo-config > select[name="id"]');
+  const inputTM=document.querySelector('#jikkyo-config > input[name="tm"]');
+  const inputTMSec=document.querySelector('#jikkyo-config > select[name="tmsec"]');
   const shiftable=cbJikkyo&&document.getElementById("jikkyo-comm").dataset.shiftable;
   if(shiftable){
     //Get all comments at once.
@@ -1076,6 +1106,7 @@ const runTranscodeScript=(postCommentQuery)=>{
       };
       readTimer=setTimeout(read,200);
     };
+    let jkID=0,jkTM=0;
     let xhr=null;
     const onclickJikkyo=()=>{
       cbJikkyo.onclick=onclickJikkyo;
@@ -1090,7 +1121,7 @@ const runTranscodeScript=(postCommentQuery)=>{
       startRead();
       if(xhr)return;
       xhr=new XMLHttpRequest();
-      xhr.open("GET","jklog.lua"+vid.initSrc.match(/\?fname=[^&]*/)[0]);
+      xhr.open("GET","jklog.lua"+vid.initSrc.match(/\?fname=[^&]*/)[0]+"&jkid="+jkID+"&jktm="+jkTM);
       xhr.onloadend=()=>{
         if(!logText){
           if(onJikkyoStreamError)onJikkyoStreamError(xhr.status,0);
@@ -1099,14 +1130,37 @@ const runTranscodeScript=(postCommentQuery)=>{
       xhr.onload=()=>{
         if(xhr.status!=200||!xhr.response)return;
         logText=xhr.response;
+        const m=logText.match(/^<!-- J=([0-9]+);T=([0-9]+)/);
+        if(m){
+          for(const opt of selectID.options){
+            if(opt.value==m[1]){
+              opt.selected=true;
+              break;
+            }
+          }
+          inputTM.value=new Date(1000*m[2]+32400000).toISOString().substring(0,16);
+          inputTMSec.options[m[2]%60].selected=true;
+        }
+        const comm=document.getElementById("jikkyo-comm");
+        if(stats&&stats.canvas){
+          comm.removeChild(stats.canvas);
+        }
         stats=getJikkyoLogStats(logText);
         drawStatsGraph(stats);
         if(stats.canvas){
-          const comm=document.getElementById("jikkyo-comm");
           comm.insertBefore(stats.canvas,comm.firstChild);
         }
       };
       xhr.send();
+    };
+    const btnConfig=document.querySelector("#jikkyo-config > button");
+    btnConfig.onclick=selectID.onchange=()=>{
+      if(xhr&&xhr.readyState!=4)return;
+      jkID=+(selectID.value||"0");
+      jkTM=inputTM.value?Math.floor(Date.parse(inputTM.value+"Z")/60000)*60+inputTMSec.selectedIndex-32400:0;
+      logText=null;
+      xhr=null;
+      onclickJikkyo();
     };
     setTimeout(onclickJikkyo,500);
   }
@@ -1114,6 +1168,7 @@ const runTranscodeScript=(postCommentQuery)=>{
   if(cbDatacast||(cbJikkyo&&!shiftable)){
     let onDataStream=null;
     let onDataStreamError=null;
+    let jkID=0,jkTM=0;
     {
       let reopen=false;
       let xhr=null;
@@ -1124,7 +1179,7 @@ const runTranscodeScript=(postCommentQuery)=>{
           xhr=null;
           if(onDataStream||(onJikkyoStream&&!shiftable)){
             reopen=true;
-            setTimeout(()=>{reopen=false;openSubStream();},5000);
+            setTimeout(()=>{reopen=false;openSubStream();},postCommentQuery?5000:2000);
           }
           return;
         }
@@ -1133,7 +1188,7 @@ const runTranscodeScript=(postCommentQuery)=>{
         const ctx={};
         xhr=new XMLHttpRequest();
         xhr.open("GET",(vid.fastParam?vid.initSrc.replace(/&fast=[^&]*/,"")+vid.fastParam:vid.initSrc)+(onDataStream?"&psidata=1":"")+
-                 (onJikkyoStream&&!shiftable?"&jikkyo=1":"")+"&ofssec="+currentAbsTime());
+                 (onJikkyoStream&&!shiftable?"&jikkyo=1&jkid="+jkID+"&jktm="+jkTM:"")+"&ofssec="+currentAbsTime());
         xhr.onloadend=()=>{
           if(xhr&&(readCount==0||xhr.status!=0)){
             if(onDataStreamError)onDataStreamError(xhr.status,readCount);
@@ -1141,9 +1196,25 @@ const runTranscodeScript=(postCommentQuery)=>{
           }
           xhr=null;
         };
+        let mHeader=null;
         xhr.onprogress=()=>{
           if(xhr&&xhr.status==200&&xhr.response){
-            readCount=progressPsiDataChatMixedStream(readCount,xhr.response,onDataStream,onJikkyoStream,ctx);
+            readCount=progressPsiDataChatMixedStream(readCount,xhr.response,onDataStream,s=>{
+              if(!mHeader&&!!(mHeader=s.match(/^<!-- J=([0-9]+)(?:;T=([0-9]+))?/))){
+                for(const opt of selectID.options){
+                  if(opt.value==mHeader[1]){
+                    opt.selected=true;
+                    break;
+                  }
+                }
+                if(mHeader[2]){
+                  const tm=mHeader[2]-currentAbsTime();
+                  inputTM.value=new Date(1000*tm+32400000).toISOString().substring(0,16);
+                  inputTMSec.options[tm%60].selected=true;
+                }
+              }
+              if(onJikkyoStream)onJikkyoStream(s);
+            },ctx);
           }
         };
         xhr.send();
@@ -1215,7 +1286,19 @@ const runTranscodeScript=(postCommentQuery)=>{
         }
         openSubStream();
       };
-      setTimeout(onclickJikkyo,500);
+      const btnConfig=document.querySelector("#jikkyo-config > button");
+      btnConfig.onclick=selectID.onchange=()=>{
+        jkID=+(selectID.value||"0");
+        jkTM=inputTM.value?Math.floor(Date.parse(inputTM.value+"Z")/60000)*60+inputTMSec.selectedIndex-32400:0;
+        openSubStream();
+      };
+      if(postCommentQuery){
+        //Not configurable for live mode.
+        inputTM.style.display="none";
+        inputTMSec.style.display="none";
+        btnConfig.style.display="none";
+      }
+      setTimeout(onclickJikkyo,postCommentQuery?5000:2000);
     }
   }
   const voffset=document.getElementById("vid-offset");

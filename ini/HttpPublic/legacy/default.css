@@ -764,7 +764,7 @@ th, td {
   width: 0;
 }
 
-#jikkyo-comm > button {
+#jikkyo-comm button {
   margin: 0;
 }
 
@@ -774,8 +774,18 @@ th, td {
   width: 100%;
 }
 
+#jikkyo-config > input {
+  margin: 0.1em;
+}
+
+#jikkyo-config,
+#jikkyo-comm.minimized > #jikkyo-config,
 #jikkyo-comm.minimized > button {
   display: none;
+}
+
+#jikkyo-config.display {
+  display: inline-block;
 }
 
 #jikkyo-chats {

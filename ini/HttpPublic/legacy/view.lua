@@ -31,6 +31,7 @@ if hlsKey and not (ALLOW_HLS and option.outputHls) then
 end
 psidata=GetVarInt(query,'psidata')==1
 jikkyo=GetVarInt(query,'jikkyo')==1
+jkID=GetVarInt(query,'jkid',1,65535)
 hlsMsn=GetVarInt(query,'_HLS_msn',1)
 hlsPart=GetVarInt(query,'_HLS_part',0)
 
@@ -132,9 +133,9 @@ function OpenPsiDataArchiver(pipeName,targetSID)
   return edcb.io.popen(WIN32 and '"'..cmd..'"' or cmd,'r'..POPEN_BINARY)
 end
 
-function OpenLiveJikkyo(pid,nid,sid)
+function OpenLiveJikkyo(pid,jkID,nid,sid)
   if JKCNSL_PATH then
-    if not nid and edcb.GetTunerProcessStatusAll then
+    if not jkID and not nid and edcb.GetTunerProcessStatusAll then
       -- 起動中のチューナのONIDとTSIDを調べ、チャンネル情報から適当にSIDを得る
       local t=nil
       for i,v in ipairs(edcb.GetTunerProcessStatusAll()) do
@@ -153,7 +154,7 @@ function OpenLiveJikkyo(pid,nid,sid)
         end
       end
     end
-    local jkID=nid and GetJikkyoID(nid,sid)
+    jkID=jkID or (nid and GetJikkyoID(nid,sid))
     if not jkID then
       return 'Unable to determine Jikkyo ID.'
     end
@@ -357,7 +358,7 @@ if onid then
               end
             end
             if f and jikkyo then
-              f.jk,f.jkID,f.closeJK=OpenLiveJikkyo(pid,onid,sid)
+              f.jk,f.jkID,f.closeJK=OpenLiveJikkyo(pid,jkID,onid,sid)
               if not f.jk then
                 if f.psi then f.psi:close() end
                 f=nil
@@ -402,7 +403,7 @@ elseif n and n<=65535 then
         end
         if f and jikkyo then
           if tonumber(pid) then
-            f.jk,f.jkID,f.closeJK=OpenLiveJikkyo(tonumber(pid))
+            f.jk,f.jkID,f.closeJK=OpenLiveJikkyo(tonumber(pid),jkID)
           end
           if not f.jk then
             if f.psi then f.psi:close() end

@@ -414,19 +414,39 @@ function VideoWrapperBegin()
     ..'<div class="video-container arib-video-container arib-video-container-prepend arib-video-container-tunnel-pointer" id="vid-cont">'
 end
 
-function VideoWrapperEnd(shiftable)
-  return '</div><div id="jikkyo-comm"'..(shiftable and ' data-shiftable="1"' or '')..' style="display:none">'
-    ..(shiftable and table.concat({'','-15)">-15','-1)">-1','1)">+1','15)">+15',''},'</button><button type="button" onclick="shiftJikkyo('):match('>(.*)<') or '')
-    ..'<div id="jikkyo-chats"></div></div></div></div>'
+function VideoWrapperEnd(jkList,shiftable)
+  local s='</div>'
+  if jkList then
+    s=s..'<div id="jikkyo-comm"'..(shiftable and ' data-shiftable="1"' or '')..' style="display:none">'
+      ..(shiftable and table.concat({'','-15)">-15','-1)">-1','1)">+1','15)">+15',''},'</button><button type="button" onclick="shiftJikkyo('):match('>(.*)<') or '')
+      ..'<button type="button" onclick="document.getElementById(\'jikkyo-config\').classList.toggle(\'display\')">Set</button>'
+      ..'<span id="jikkyo-config"><select name="id">\n'
+      ..'<option value="0" selected>jk? (初期値)\n'
+    local esc=edcb.htmlEscape
+    edcb.htmlEscape=15
+    for i,v in ipairs(jkList) do
+      s=s..'<option value="'..v[1]..'">jk'..v[1]..' ('..EdcbHtmlEscape(v[2])..')\n'
+    end
+    edcb.htmlEscape=esc
+    local i=0
+    s=s..'</select><input name="tm" type="datetime-local"><select name="tmsec"><option selected>00s'
+      ..('_'):rep(59):gsub('_',function() i=i+1 return ('<option>%02ds'):format(i) end)
+      ..'</select><button type="button">変更</button></span><div id="jikkyo-chats"></div></div>'
+  end
+  s=s..'</div></div>'
+  return s
 end
 
 function TranscodeSettingTemplate(xq,forDL,fsec)
   local s='<select name="option">'
+  local esc=edcb.htmlEscape
+  edcb.htmlEscape=15
   for i,v in ipairs(XCODE_OPTIONS) do
     if forDL or v.tslive or not ALLOW_HLS or not ALWAYS_USE_HLS or v.outputHls then
       s=s..'<option value="'..i..'"'..Selected((xq.option or XCODE_SELECT_OPTION)==i)..'>'..EdcbHtmlEscape(v.name)
     end
   end
+  edcb.htmlEscape=esc
   s=s..'</select>\n'
   if fsec then
     s=s..'<select name="offset">'

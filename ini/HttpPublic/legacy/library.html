@@ -1,5 +1,8 @@
 -- vim:set ft=lua:
 dofile(mg.script_name:gsub('[^\\/]*$','')..'util.lua')
+if JKRDLOG_PATH then
+  dofile(mg.script_name:gsub('[^\\/]*$','')..'jkconst.lua')
+end
 
 --<0:再生画面へのリンク, 0:DLリンク, 1:トランスコード再生画面, 2～3:直接再生画面(偶数:ローカルファイル再生)
 vtag=GetVarInt(mg.request_info.query_string,'vtag') or -1
@@ -139,7 +142,7 @@ else
         ct:Append(VideoWrapperBegin()
           ..'<video id="video" autoplay playsinline controls '..(vtag%2==0 and 'data-' or '')..'src="'..PathToRoot()..mg.url_encode(ref):gsub('%%2f','/')..'">/'..EdcbHtmlEscape(ref)
           ..'<track id="vid-meta" kind="metadata"'..(info.ists and '' or ' src="'..PathToRoot()..mg.url_encode(ref):gsub('%%2f','/'):gsub('%.[0-9A-Za-z]+$','')..'.vtt"')..' type="text/vtt" default>'
-          ..'</video>'..VideoWrapperEnd(true)..'\n'..VideoScriptTemplate(info.ists))
+          ..'</video>'..VideoWrapperEnd(JKRDLOG_PATH and GetChatStreamNameList(),true)..'\n'..VideoScriptTemplate(info.ists))
       else
         ct:Append((info.ists and '' or '<a href="library.html?i='..index..(#dirhash>0 and '&amp;d='..table.concat(dirhash,',') or '')..'&amp;h='..hash..'&amp;vtag=3">')
           ..'/'..EdcbHtmlEscape(ref)..(info.ists and '' or '</a>')
@@ -181,7 +184,7 @@ else
           ct:Append('\n'..VideoWrapperBegin()
             ..(xq.tslive and '<canvas id="video" data-pausable="1" data-src="'..src..'"></canvas>' or
                  '<video id="video" autoplay playsinline controls '..(ALLOW_HLS and 'data-' or '')..'src="'..src..'">xcode</video>')
-            ..VideoWrapperEnd(shiftable)..'\n'..TranscodeScriptTemplate(false,xq.caption,xq.jikkyo,{ofssec=fsec*(xq.offset or 0)/100,fast=xq.fast}))
+            ..VideoWrapperEnd(JKRDLOG_PATH and GetChatStreamNameList(),shiftable)..'\n'..TranscodeScriptTemplate(false,xq.caption,xq.jikkyo,{ofssec=fsec*(xq.offset or 0)/100,fast=xq.fast}))
           if xq.tslive then
             ct:Append(TsliveScriptTemplate(xq.autoCinema))
           elseif ALLOW_HLS then

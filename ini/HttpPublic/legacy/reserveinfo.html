@@ -1,5 +1,8 @@
 -- vim:set ft=lua:
 dofile(mg.script_name:gsub('[^\\/]*$','')..'util.lua')
+if JKRDLOG_PATH then
+  dofile(mg.script_name:gsub('[^\\/]*$','')..'jkconst.lua')
+end
 
 function Change(id,post)
   local r=edcb.GetReserveData(id)
@@ -130,7 +133,7 @@ if r then
           ct:Append(VideoWrapperBegin()
             ..'<video id="video" autoplay playsinline controls '..(vtag%2==0 and 'data-' or '')..'src="'..PathToRoot()..mg.url_encode(ref..ext):gsub('%%2f','/')..'">/'..EdcbHtmlEscape(ref..ext)
             ..'<track id="vid-meta" kind="metadata"'..(ext=='' and '' or ' src="'..PathToRoot()..mg.url_encode(ref..ext):gsub('%%2f','/'):gsub('%.[0-9A-Za-z]+$','')..'.vtt"')..' type="text/vtt" default>'
-            ..'</video>'..VideoWrapperEnd(true)..'\n'..VideoScriptTemplate(ext==''))
+            ..'</video>'..VideoWrapperEnd(JKRDLOG_PATH and GetChatStreamNameList(),true)..'\n'..VideoScriptTemplate(ext==''))
         else
           ct:Append((ext=='' and '' or '<a href="reserveinfo.html?id='..r.reserveID..(fromepg and '&amp;fromepg=1' or '')..'&amp;vtag='..(i*2+1)..'">')
             ..'/'..EdcbHtmlEscape(ref..ext)..(ext=='' and '' or '</a>')
@@ -165,7 +168,7 @@ if r then
             ct:Append('\n'..VideoWrapperBegin()
               ..(xq.tslive and '<canvas id="video" data-pausable="1" data-src="'..src..'"></canvas>' or
                    '<video id="video" autoplay playsinline controls '..(ALLOW_HLS and 'data-' or '')..'src="'..src..'">xcode</video>')
-              ..VideoWrapperEnd()..'\n'..TranscodeScriptTemplate(false,xq.caption,xq.jikkyo,{ofssec=fsec*(xq.offset or 0)/100,fast=xq.fast}))
+              ..VideoWrapperEnd(JKRDLOG_PATH and GetChatStreamNameList())..'\n'..TranscodeScriptTemplate(false,xq.caption,xq.jikkyo,{ofssec=fsec*(xq.offset or 0)/100,fast=xq.fast}))
             if xq.tslive then
               ct:Append(TsliveScriptTemplate(xq.autoCinema))
             elseif ALLOW_HLS then
