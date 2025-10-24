@@ -284,10 +284,7 @@ if fpath then
 end
 
 if not f then
-  ct=CreateContentBuilder()
-  ct:Append(DOCTYPE_HTML4_STRICT..'<title>xcode.lua</title><p><a href="index.html">メニュー</a></p>')
-  ct:Finish()
-  mg.write(ct:Pop(Response(404,'text/html','utf-8',ct.len)..'\r\n'))
+  mg.write(Response(404,nil,nil,0)..'\r\n')
 elseif psidata or jikkyo then
   -- PSI/SI、実況、またはその混合データストリームを返す
   mg.write(Response(200,mg.get_mime_type(fname),'utf-8')..'Content-Disposition: filename='..fname..'\r\n\r\n')

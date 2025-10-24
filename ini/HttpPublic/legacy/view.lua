@@ -93,14 +93,7 @@ function OpenTranscoder(pipeName,searchName,nwtvclose,targetSID)
     cmd=cmd..' | '..tsmemseg..(hls4>0 and ' -4' or '')..' -a 10 -m 8192 -d 3 -p '..partConfigSec..' '..(WIN32 and '' or '-g '..QuoteCommandArgForPath(EdcbModulePath(),hlsKey)..' ')
     if nwtvclose then
       cmd=cmd..(WIN32 and '-c "..\\EpgTimerSrv.exe /luapost ' or '-c "echo \\"')
-      if type(nwtvclose[2])=='string' then
-        -- 古い環境用
-        cmd=cmd.."if(edcb.GetPrivateProfile('NWTV','nwtv"..nwtvclose[1].."open','"..nwtvclose[2]
-          .."','Setting"..(WIN32 and '\\\\' or '/').."HttpPublic.ini')=='"..nwtvclose[2].."')"
-      else
-        cmd=cmd..'ok,pid,openID=edcb.IsOpenNetworkTV('..nwtvclose[1]..');if(ok)and(openID=='..nwtvclose[2]..')'
-      end
-      cmd=cmd..'then;edcb.CloseNetworkTV('..nwtvclose[1]..');end'
+        ..'ok,pid,openID=edcb.IsOpenNetworkTV('..nwtvclose[1]..');if(ok)and(openID=='..(nwtvclose[2] or 'nil')..')then;edcb.CloseNetworkTV('..nwtvclose[1]..');end'
         ..(WIN32 and '" ' or '\\" >>\\"'..PathAppend(EdcbModulePath(),'EpgTimerSrvLuaPost.fifo')..'\\"" ')
     end
     cmd=cmd..hlsKey..'_'
@@ -329,11 +322,6 @@ if onid then
         TerminateCommandlineLike('tsreadex',' -z edcb-legacy-nwtv-'..n..' ')
         -- NetworkTVモードを開始
         ok,pid,myOpenID=edcb.OpenNetworkTV(2,onid,tsid,sid,n)
-        if ok and not myOpenID then
-          -- 古い環境用
-          myOpenID='@'..os.time()
-          edcb.WritePrivateProfile('NWTV','nwtv'..n..'open',myOpenID,'Setting\\HttpPublic.ini')
-        end
       end
       if ok then
         -- 名前付きパイプができるまで待つ
@@ -431,10 +419,7 @@ elseif n and n<=65535 then
 end
 
 if not f then
-  ct=CreateContentBuilder()
-  ct:Append(DOCTYPE_HTML4_STRICT..'<title>view.lua</title><p><a href="index.html">メニュー</a></p>')
-  ct:Finish()
-  mg.write(ct:Pop(Response(404,'text/html','utf-8',ct.len)..'\r\n'))
+  mg.write(Response(404,nil,nil,0)..'\r\n')
 elseif psidata or jikkyo then
   -- PSI/SI、実況、またはその混合データストリームを返す
   mg.write(Response(200,mg.get_mime_type(fname),'utf-8')..'Content-Disposition: filename='..fname..'\r\n\r\n')
@@ -516,19 +501,12 @@ else
   if onid then
     -- NetworkTVモードを終了
     -- リロード時などの終了を防ぐ。厳密にはロックなどが必要だが概ねうまくいけば良い
-    if type(myOpenID)=='string' then
-      -- 古い環境用
-      if edcb.GetPrivateProfile('NWTV','nwtv'..n..'open',myOpenID,'Setting\\HttpPublic.ini')==myOpenID then
-        edcb.CloseNetworkTV(n)
-      end
-    else
-      ok,pid,openID=edcb.IsOpenNetworkTV(n)
-      if ok and openID==myOpenID then
-        -- チャンネル変更のため終了を遅らせる
-        edcb.os.execute((WIN32 and 'start "" /b cmd /s /c "timeout 5 & cd /d "'..EdcbModulePath()..'" && .\\EpgTimerSrv.exe /luapost ' or '(sleep 5 ; echo "')
-          ..'ok,pid,openID=edcb.IsOpenNetworkTV('..n..');if(ok)and(openID=='..myOpenID..')then;edcb.CloseNetworkTV('..n..');end'
-          ..(WIN32 and '"' or '" >>"'..PathAppend(EdcbModulePath(),'EpgTimerSrvLuaPost.fifo')..'") &'))
-      end
+    ok,pid,openID=edcb.IsOpenNetworkTV(n)
+    if ok and openID==myOpenID then
+      -- チャンネル変更のため終了を遅らせる
+      edcb.os.execute((WIN32 and 'start "" /b cmd /s /c "timeout 5 & cd /d "'..EdcbModulePath()..'" && .\\EpgTimerSrv.exe /luapost ' or '(sleep 5 ; echo "')
+        ..'ok,pid,openID=edcb.IsOpenNetworkTV('..n..');if(ok)and(openID=='..(myOpenID or 'nil')..')then;edcb.CloseNetworkTV('..n..');end'
+        ..(WIN32 and '"' or '" >>"'..PathAppend(EdcbModulePath(),'EpgTimerSrvLuaPost.fifo')..'") &'))
     end
   end
 end
