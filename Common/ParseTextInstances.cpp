@@ -266,7 +266,7 @@ void CParseChText5::ParseLine(LPCWSTR parseLine)
 	item.epgCapFlag = NextTokenToInt(token) != 0;
 	item.searchFlag = NextTokenToInt(token) != 0;
 	item.remoconID = 0;
-	DWORD key = (LONGLONG)item.originalNetworkID << 32 | (LONGLONG)item.transportStreamID << 16 | item.serviceID;
+	LONGLONG key = (LONGLONG)item.originalNetworkID << 32 | (LONGLONG)item.transportStreamID << 16 | item.serviceID;
 	if( this->itemMap.empty() ){
 		this->parsedOrder.clear();
 	}

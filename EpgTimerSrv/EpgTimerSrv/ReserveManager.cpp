@@ -2000,7 +2000,6 @@ bool CReserveManager::IsFindRecEventInfo(const EPGDB_EVENT_INFO& info, WORD chkD
 				if( chkStartTime <= this->recInfo2SearchStartTime ){
 					//検索用にイベント名でソートしたリストを構築する
 					this->recInfo2SearchCache.clear();
-					this->recInfo2SearchCache.reserve(this->recInfo2Text.GetMap().size());
 					//時間的にマッチし得ないものは除外する
 					this->recInfo2SearchStartTime = chkStartTime - 10 * 24 * 60 * 60 * I64_1SEC;
 					for( const auto& item : this->recInfo2Text.GetMap() ){
@@ -2017,15 +2016,16 @@ bool CReserveManager::IsFindRecEventInfo(const EPGDB_EVENT_INFO& info, WORD chkD
 							BSTR rpl_;
 							if( rplFrom && rplTo && SUCCEEDED(regExp->Replace(rplFrom.get(), rplTo.get(), &rpl_)) ){
 								CEpgDBManager::OleCharPtr rpl(rpl_, SysFreeString);
-								this->recInfo2SearchCache.emplace_back(SysStringLen(rpl.get()) ? rpl.get() : L"", item.first);
-							}else{
+								if( SysStringLen(rpl.get()) ){
+									this->recInfo2SearchCache.emplace_back(rpl.get(), item.first);
+								}
+							}
 #else
 							try{
 								this->recInfo2SearchCache.emplace_back(std::regex_replace(item.second.eventName, re, wstring()), item.first);
 							}catch( std::regex_error& ){
-#endif
-								this->recInfo2SearchCache.emplace_back(L"", item.first);
 							}
+#endif
 						}
 					}
 					std::sort(this->recInfo2SearchCache.begin(), this->recInfo2SearchCache.end());
