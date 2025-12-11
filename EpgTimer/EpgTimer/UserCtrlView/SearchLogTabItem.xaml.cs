@@ -6,6 +6,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -34,7 +35,6 @@ namespace EpgTimer.UserCtrlView
         ObservableCollection<ServiceViewItem> _serviceList_Other = new ObservableCollection<ServiceViewItem>();
 
         ObservableCollection<SearchLogItem> _searchLogItems = new ObservableCollection<SearchLogItem>();
-        List<SearchLogItem> _selectedLogItems = new List<SearchLogItem>();
         /// <summary>
         /// 編集中
         /// </summary>
@@ -660,17 +660,20 @@ namespace EpgTimer.UserCtrlView
 
         void search_AddNotWord(List<SearchLogItem> searchLogItems0)
         {
-            _searchLogResultItems.Clear();
+            ObservableCollection<SearchLogResultItem> searchLogResultItems1 = new ObservableCollection<SearchLogResultItem>();
             foreach (var logItem1 in searchLogItems0)
             {
                 search(logItem1);
                 foreach (var resultItem1 in logItem1.resultItems)
                 {
-                    _searchLogResultItems.Add(resultItem1);
+                    searchLogResultItems1.Add(resultItem1);
                 }
             }
             db_SearchLog.updateOrInsert(searchLogItems0);
-            changeVisibility_Resutltems();
+            Dispatcher.BeginInvoke(new Action(() => {
+                listView_Result.ItemsSource = _searchLogResultItems = searchLogResultItems1;
+                changeVisibility_Resutltems();
+            }));
         }
 
         void addNotWord(ref List<SearchLogItem> searchLogItems0, SearchLogResultItem resultItem0, string notWord0, bool isTitleOnly0)
@@ -1956,13 +1959,18 @@ namespace EpgTimer.UserCtrlView
 
         private void menu_Result_NotWord_Click(object sender, RoutedEventArgs e)
         {
-            List<SearchLogItem> searchLogItems1 = new List<SearchLogItem>();
-            foreach (SearchLogResultItem item1 in listView_Result.SelectedItems)
-            {
-                string title1 = RecLogWindow.trimKeyword(item1.tvProgramTitle);
-                addNotWord(ref searchLogItems1, item1, title1, true);
+            List<SearchLogResultItem> results1 = new List<SearchLogResultItem>();
+            foreach (SearchLogResultItem item1 in listView_Result.SelectedItems) {
+                results1.Add(item1);
             }
-            search_AddNotWord(searchLogItems1);
+            Task.Run(() => {
+                List<SearchLogItem> searchLogItems1 = new List<SearchLogItem>();
+                foreach (SearchLogResultItem item1 in results1) {
+                    string title1 = RecLogWindow.trimKeyword(item1.tvProgramTitle);
+                    addNotWord(ref searchLogItems1, item1, title1, true);
+                }
+                search_AddNotWord(searchLogItems1);
+            });
         }
 
         private void menu_Epg_NotWard_Click(object sender, RoutedEventArgs e)

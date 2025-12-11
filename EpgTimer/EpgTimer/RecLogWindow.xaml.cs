@@ -1,8 +1,12 @@
-﻿using EpgTimer.DefineClass;
+﻿using EpgTimer.Common;
+using EpgTimer.DefineClass;
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
@@ -11,9 +15,6 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
-using System.ComponentModel;
-using EpgTimer.Common;
-using System.Text.RegularExpressions;
 
 namespace EpgTimer
 {
@@ -258,22 +259,32 @@ namespace EpgTimer
             }
         }
 
-        void show()
-        {
-            Point pnt_Client1 = Mouse.GetPosition(Owner);
-            Point pnt_Screen1 = Owner.PointToScreen(pnt_Client1);
-            Left = pnt_Screen1.X - 50;
-            if (SystemParameters.WorkArea.Width < Right)
-            {
-                Left = SystemParameters.WorkArea.Width - Width;
+        void show() {
+            GetCursorPos(out POINT mousePoint);
+            // OwnerのDPIスケールを取得
+            double dpiScale = 1.0;
+            if (Owner != null) {
+                PresentationSource source = PresentationSource.FromVisual(Owner);
+                if (source != null) {
+                    dpiScale = source.CompositionTarget.TransformToDevice.M11;
+                }
             }
-            Top = pnt_Screen1.Y - 50;
-            if (SystemParameters.WorkArea.Height < Bottom)
-            {
-                Top = SystemParameters.WorkArea.Height - Height;
-            }
-            //
+            // DPIスケールを考慮してWPF座標に変換
+            double wpfX = mousePoint.X / dpiScale;
+            double wpfY = mousePoint.Y / dpiScale;
+            WindowStartupLocation = WindowStartupLocation.Manual;
+            Left = wpfX - 50;
+            Top = wpfY - 50;
             base.ShowDialog();
+        }
+
+        [DllImport("user32.dll")]
+        private static extern bool GetCursorPos(out POINT lpPoint);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct POINT {
+            public int X;
+            public int Y;
         }
 
         void hide()
