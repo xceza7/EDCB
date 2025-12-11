@@ -5,10 +5,10 @@
 #include "../Common/EpgTimerUtil.h"
 
 CTSOut::CTSOut(void)
-	: epgFile(NULL, fclose)
 {
 	this->chChangeState = CH_ST_INIT;
 	this->chChangeTime = 0;
+	this->chChangePresumedONID = 0xFFFF;
 	this->lastONID = 0xFFFF;
 	this->lastTSID = 0xFFFF;
 
@@ -29,17 +29,18 @@ CTSOut::~CTSOut(void)
 	StopSaveEPG(FALSE);
 }
 
-void CTSOut::SetChChangeEvent(BOOL resetEpgUtil)
+void CTSOut::SetChChangeEvent(WORD presumedONID, BOOL resetEpgUtil)
 {
-	CBlockLock lock(&this->objLock);
+	lock_recursive_mutex lock(this->objLock);
 
 	this->chChangeState = CH_ST_WAIT_PAT;
-	this->chChangeTime = GetTickCount();
+	this->chChangeTime = GetU32Tick();
+	this->chChangePresumedONID = presumedONID;
 
 	this->decodeUtil.UnLoadDll();
 
 	if( resetEpgUtil == TRUE ){
-		CBlockLock lock2(&this->epgUtilLock);
+		lock_recursive_mutex lock2(this->epgUtilLock);
 		//EpgDataCap3は内部メソッド単位でアトミック。初期化以外はobjLockかepgUtilLockのどちらかを獲得すればよい
 		this->epgUtil.UnInitialize();
 		this->epgUtil.Initialize(FALSE);
@@ -49,11 +50,11 @@ void CTSOut::SetChChangeEvent(BOOL resetEpgUtil)
 
 BOOL CTSOut::IsChUnknown(DWORD* elapsedTime)
 {
-	CBlockLock lock(&this->objLock);
+	lock_recursive_mutex lock(this->objLock);
 
 	if( this->chChangeState != CH_ST_DONE ){
 		if( elapsedTime != NULL ){
-			*elapsedTime = this->chChangeState == CH_ST_INIT ? MAXDWORD : GetTickCount() - this->chChangeTime;
+			*elapsedTime = this->chChangeState == CH_ST_INIT ? MAXDWORD : GetU32Tick() - this->chChangeTime;
 		}
 		return TRUE;
 	}
@@ -62,7 +63,7 @@ BOOL CTSOut::IsChUnknown(DWORD* elapsedTime)
 
 BOOL CTSOut::GetStreamID(WORD* ONID, WORD* TSID)
 {
-	CBlockLock lock(&this->objLock);
+	lock_recursive_mutex lock(this->objLock);
 
 	if( this->chChangeState == CH_ST_DONE ){
 		*ONID = this->lastONID;
@@ -87,8 +88,9 @@ void CTSOut::OnChChanged(WORD onid, WORD tsid)
 		}
 		this->decodeUtil.SetEmm(this->emmEnableFlag);
 	}
-	ResetErrCount();
-
+	for( const auto& item : this->serviceUtilMap ){
+		item.second->Clear(tsid);
+	}
 	this->serviceFilter.Clear(tsid);
 }
 
@@ -96,11 +98,11 @@ void CTSOut::AddTSBuff(BYTE* data, DWORD dataSize)
 {
 	//dataは同期済みかつそのサイズは188の整数倍であること
 
-	CBlockLock lock(&this->objLock);
+	lock_recursive_mutex lock(this->objLock);
 	if( dataSize == 0 || data == NULL ){
 		return;
 	}
-	DWORD tick = GetTickCount();
+	DWORD tick = GetU32Tick();
 	if( this->chChangeState == CH_ST_WAIT_PAT && tick - this->chChangeTime < 1000 ){
 		//1秒間はチャンネル切り替え前のパケット来る可能性を考慮して無視する
 		return;
@@ -137,7 +139,16 @@ void CTSOut::AddTSBuff(BYTE* data, DWORD dataSize)
 					if( this->chChangeState == CH_ST_INIT || this->chChangeState == CH_ST_WAIT_ID ){
 						WORD onid;
 						WORD tsid;
-						if( this->epgUtil.GetTSID(&onid, &tsid) == NO_ERR ){
+						DWORD ret = this->epgUtil.GetTSID(&onid, &tsid);
+						if( ret != NO_ERR && this->chChangePresumedONID != 0xFFFF && this->lastTSID != 0xFFFF ){
+							//ONIDの取得は遅いことがあるので、チャンネル変更などでONIDが予測できる場合はそれを使う
+							//切り替え前との区別を確実にするためTSIDが変化する場合に限る
+							onid = this->chChangePresumedONID;
+							if( this->epgUtil.GetTSID(NULL, &tsid) == NO_ERR && tsid != this->lastTSID ){
+								ret = NO_ERR;
+							}
+						}
+						if( ret == NO_ERR ){
 							if( this->chChangeState == CH_ST_INIT ){
 								AddDebugLogFormat(L"★Ch Init 0x%04X 0x%04X", onid, tsid);
 								OnChChanged(onid, tsid);
@@ -152,14 +163,11 @@ void CTSOut::AddTSBuff(BYTE* data, DWORD dataSize)
 					}
 				}else{
 					this->serviceFilter.FilterPacket(this->decodeBuff, data + i, packet);
-					if( this->serviceFilter.CatOrPmtUpdated() ){
-						UpdateServiceUtil(FALSE);
-					}
 					if( this->parseEpgPostProcess == FALSE ){
 						if( packet.PID < BON_SELECTIVE_PID ){
 							ParseEpgPacket(data + i, packet);
 						}else{
-							CBlockLock lock2(&this->epgUtilLock);
+							lock_recursive_mutex lock2(this->epgUtilLock);
 							if( this->logoAdditionalNeededPids ){
 								for( const WORD* pid = this->logoAdditionalNeededPids; *pid; pid++ ){
 									if( *pid == packet.PID ){
@@ -224,14 +232,12 @@ void CTSOut::AddTSBuff(BYTE* data, DWORD dataSize)
 	}
 
 	//各サービス処理にデータ渡す
-	{
-		for( auto itrService = serviceUtilMap.begin(); itrService != serviceUtilMap.end(); itrService++ ){
-			itrService->second->AddTSBuff(decodeData, decodeSize, [this](WORD onid, WORD tsid, WORD sid) -> int {
-				CBlockLock lock2(&this->epgUtilLock);
-				EPG_EVENT_INFO* epgInfo;
-				return this->epgUtil.GetEpgInfo(onid, tsid, sid, FALSE, &epgInfo) == NO_ERR ? epgInfo->event_id : -1;
-			});
-		}
+	for( const auto& item : this->serviceUtilMap ){
+		item.second->AddTSBuff(decodeData, decodeSize, [this](WORD onid, WORD tsid, WORD sid) -> int {
+			lock_recursive_mutex lock2(this->epgUtilLock);
+			EPG_EVENT_INFO* epgInfo;
+			return this->epgUtil.GetEpgInfo(onid, tsid, sid, FALSE, &epgInfo) == NO_ERR ? epgInfo->event_id : -1;
+		});
 	}
 }
 
@@ -248,7 +254,7 @@ void CTSOut::ParseEpgPacket(BYTE* data, const CTSPacketUtil& packet)
 				//TOTを前倒しで書き込むための場所を確保
 				BYTE nullData[188] = { 0x47, 0x1F, 0xFF, 0x10 };
 				std::fill_n(nullData + 4, 184, (BYTE)0xFF);
-				this->epgFileTotPos = _ftelli64(this->epgFile.get());
+				this->epgFileTotPos = my_ftell(this->epgFile.get());
 				fwrite(nullData, 1, 188, this->epgFile.get());
 			}
 		}
@@ -256,10 +262,10 @@ void CTSOut::ParseEpgPacket(BYTE* data, const CTSPacketUtil& packet)
 		if( packet.PID == 0x14 && this->epgFileState == EPG_FILE_ST_TOT ){
 			this->epgFileState = EPG_FILE_ST_ALL;
 			if( this->epgFileTotPos >= 0 ){
-				_fseeki64(this->epgFile.get(), this->epgFileTotPos, SEEK_SET);
+				my_fseek(this->epgFile.get(), this->epgFileTotPos, SEEK_SET);
 			}
 			fwrite(data, 1, 188, this->epgFile.get());
-			_fseeki64(this->epgFile.get(), 0, SEEK_END);
+			my_fseek(this->epgFile.get(), 0, SEEK_END);
 		}else if( (packet.PID == 0 && this->epgFileState >= EPG_FILE_ST_PAT) || this->epgFileState >= EPG_FILE_ST_TOT ){
 			fwrite(data, 1, 188, this->epgFile.get());
 		}
@@ -267,72 +273,25 @@ void CTSOut::ParseEpgPacket(BYTE* data, const CTSPacketUtil& packet)
 	this->epgUtil.AddTSPacket(data, 188);
 }
 
-void CTSOut::UpdateServiceUtil(BOOL updateFilterSID)
+void CTSOut::UpdateFilterServiceID()
 {
 	vector<WORD> filterSIDList;
 
-	//各サービスのPMTを探す
-	for( auto itrService = serviceUtilMap.begin(); itrService != serviceUtilMap.end(); itrService++ ){
-		if( updateFilterSID ){
-			filterSIDList.push_back(itrService->second->GetSID());
-		}
-		//EMMのPID
-		for( auto itr = this->serviceFilter.CatUtil().GetPIDList().cbegin(); itr != this->serviceFilter.CatUtil().GetPIDList().end(); itr++ ){
-			itrService->second->SetPIDName(*itr, L"EMM");
-		}
-		for( auto itrPmt = this->serviceFilter.PmtUtilMap().cbegin(); itrPmt != this->serviceFilter.PmtUtilMap().end(); itrPmt++ ){
-			if( itrService->second->GetSID() == itrPmt->second.GetProgramNumber() ){
-				//PMT発見
-				itrService->second->SetPmtPID(this->lastTSID, itrPmt->first);
-				itrService->second->SetEmmPID(this->serviceFilter.CatUtil().GetPIDList());
-			}
-
-			itrService->second->SetPIDName(itrPmt->second.GetPcrPID(), L"PCR");
-			wstring name;
-			for( auto itrPID = itrPmt->second.GetPIDTypeList().cbegin(); itrPID != itrPmt->second.GetPIDTypeList().end(); itrPID++ ){
-				switch( itrPID->second ){
-				case 0x00:
-					name = L"ECM";
-					break;
-				case 0x02:
-					name = L"MPEG2 VIDEO";
-					break;
-				case 0x0F:
-					name = L"MPEG2 AAC";
-					break;
-				case 0x1B:
-					name = L"MPEG4 VIDEO";
-					break;
-				case 0x04:
-					name = L"MPEG2 AUDIO";
-					break;
-				case 0x24:
-					name = L"HEVC VIDEO";
-					break;
-				case 0x06:
-					name = L"字幕";
-					break;
-				case 0x0D:
-					name = L"データカルーセル";
-					break;
-				default:
-					Format(name, L"stream_type 0x%0X", itrPID->second);
-					break;
-				}
-				itrService->second->SetPIDName(itrPID->first, name);
-			}
-			Format(name, L"PMT(ServiceID 0x%04X)", itrPmt->second.GetProgramNumber());
-			itrService->second->SetPIDName(itrPmt->first, name);
+	for( const auto& item : this->serviceUtilMap ){
+		filterSIDList.push_back(item.second->GetSID());
+		if( filterSIDList.back() == 0xFFFF ){
+			//下流の処理対象が全サービスなのでフィルタしない
+			this->serviceFilter.SetServiceID(true, vector<WORD>());
+			return;
 		}
 	}
-	if( updateFilterSID ){
-		this->serviceFilter.SetServiceID(std::find(filterSIDList.begin(), filterSIDList.end(), 0xFFFF) != filterSIDList.end(), filterSIDList);
-	}
+	//下流の処理対象サービスを合計したものでフィルタ
+	this->serviceFilter.SetServiceID(false, filterSIDList);
 }
 
 void CTSOut::CheckLogo(DWORD logoTypeFlags, CHECK_LOGO_RESULT& result)
 {
-	CBlockLock lock(&this->epgUtilLock);
+	lock_recursive_mutex lock(this->epgUtilLock);
 
 	this->epgUtil.SetLogoTypeFlags(logoTypeFlags, &this->logoAdditionalNeededPids);
 	result.dataUpdated = false;
@@ -343,7 +302,7 @@ void CTSOut::CheckLogo(DWORD logoTypeFlags, CHECK_LOGO_RESULT& result)
 	}
 }
 
-BOOL CALLBACK CTSOut::EnumLogoListProc(DWORD logoListSize, const LOGO_INFO* logoList, LPVOID param)
+BOOL CALLBACK CTSOut::EnumLogoListProc(DWORD logoListSize, const LOGO_INFO* logoList, void* param)
 {
 	CHECK_LOGO_RESULT& result = *((pair<CHECK_LOGO_RESULT*, vector<pair<LONGLONG, DWORD>>*>*)param)->first;
 	vector<pair<LONGLONG, DWORD>>& serviceListSizeMap = *((pair<CHECK_LOGO_RESULT*, vector<pair<LONGLONG, DWORD>>*>*)param)->second;
@@ -357,7 +316,7 @@ BOOL CALLBACK CTSOut::EnumLogoListProc(DWORD logoListSize, const LOGO_INFO* logo
 			vector<pair<LONGLONG, DWORD>>::iterator itr = lower_bound_first(serviceListSizeMap.begin(), serviceListSizeMap.end(), key);
 			try{
 				if( itr == serviceListSizeMap.end() || itr->first != key ){
-					serviceListSizeMap.insert(itr, pair<LONGLONG, DWORD>(key, 0));
+					serviceListSizeMap.emplace(itr, key, 0);
 					result.onid = logoList->onid;
 					result.id = logoList->id;
 					result.type = logoList->type;
@@ -389,7 +348,7 @@ BOOL CTSOut::StartSaveEPG(
 	const wstring& epgFilePath_
 	)
 {
-	CBlockLock lock(&this->objLock);
+	lock_recursive_mutex lock(this->objLock);
 	if( this->epgFile != NULL ){
 		return FALSE;
 	}
@@ -418,17 +377,27 @@ void CTSOut::StopSaveEPG(
 	BOOL copy
 	)
 {
-	CBlockLock lock(&this->objLock);
+	lock_recursive_mutex lock(this->objLock);
 	if( this->epgFile == NULL ){
 		return;
 	}
 
 	this->epgFile.reset();
 
-	if( copy == TRUE ){
+#ifdef _WIN32
+	if( copy ){
 		CopyFile(this->epgTempFilePath.c_str(), this->epgFilePath.c_str(), FALSE );
 	}
 	DeleteFile(this->epgTempFilePath.c_str());
+#else
+	string strTempPath;
+	string strPath;
+	WtoUTF8(this->epgTempFilePath, strTempPath);
+	WtoUTF8(this->epgFilePath, strPath);
+	if( copy == FALSE || rename(strTempPath.c_str(), strPath.c_str()) != 0 ){
+		remove(strTempPath.c_str());
+	}
+#endif
 }
 
 //EPGデータの蓄積状態を取得する
@@ -440,7 +409,7 @@ EPG_SECTION_STATUS CTSOut::GetSectionStatus(
 	BOOL l_eitFlag
 	)
 {
-	CBlockLock lock(&this->epgUtilLock);
+	lock_recursive_mutex lock(this->epgUtilLock);
 
 	return this->epgUtil.GetSectionStatus(l_eitFlag);
 }
@@ -453,7 +422,7 @@ pair<EPG_SECTION_STATUS, BOOL> CTSOut::GetSectionStatusService(
 	BOOL l_eitFlag
 	)
 {
-	CBlockLock lock(&this->epgUtilLock);
+	lock_recursive_mutex lock(this->epgUtilLock);
 
 	return this->epgUtil.GetSectionStatusService(originalNetworkID, transportStreamID, serviceID, l_eitFlag);
 }
@@ -467,7 +436,7 @@ BOOL CTSOut::SetEmm(
 	BOOL enable
 	)
 {
-	CBlockLock lock(&this->objLock);
+	lock_recursive_mutex lock(this->objLock);
 
 	try{
 		if( this->chChangeState == CH_ST_DONE ){
@@ -493,7 +462,7 @@ BOOL CTSOut::SetEmm(
 // 処理数
 DWORD CTSOut::GetEmmCount()
 {
-	CBlockLock lock(&this->objLock);
+	lock_recursive_mutex lock(this->objLock);
 
 	return this->decodeUtil.GetEmmCount();
 }
@@ -507,7 +476,7 @@ BOOL CTSOut::GetLoadStatus(
 	wstring& loadErrDll
 	)
 {
-	CBlockLock lock(&this->objLock);
+	lock_recursive_mutex lock(this->objLock);
 
 	return this->decodeUtil.GetLoadStatus(loadErrDll);
 }
@@ -521,7 +490,7 @@ DWORD CTSOut::GetServiceListActual(
 	const std::function<void(DWORD, SERVICE_INFO*)>& funcGetList
 	)
 {
-	CBlockLock lock(&this->epgUtilLock);
+	lock_recursive_mutex lock(this->epgUtilLock);
 
 	DWORD serviceListSize;
 	SERVICE_INFO* serviceList;
@@ -580,13 +549,15 @@ DWORD CTSOut::CreateServiceCtrl(
 	BOOL sendUdpTcp
 	)
 {
-	CBlockLock lock(&this->objLock);
+	lock_recursive_mutex lock(this->objLock);
 
-	auto itr = this->serviceUtilMap.insert(
-		std::make_pair(GetNextID(), std::unique_ptr<COneServiceUtil>(new COneServiceUtil(sendUdpTcp)))).first;
+	auto itr = this->serviceUtilMap.emplace(GetNextID(), std::unique_ptr<COneServiceUtil>(new COneServiceUtil(sendUdpTcp))).first;
 	itr->second->SetBonDriver(bonFile);
 	itr->second->SetNoLogScramble(noLogScramble);
-	UpdateServiceUtil(TRUE);
+	if( this->chChangeState == CH_ST_DONE ){
+		itr->second->Clear(this->lastTSID);
+	}
+	UpdateFilterServiceID();
 
 	return itr->first;
 }
@@ -600,14 +571,14 @@ BOOL CTSOut::DeleteServiceCtrl(
 	DWORD id
 	)
 {
-	CBlockLock lock(&this->objLock);
+	lock_recursive_mutex lock(this->objLock);
 
 	if( serviceUtilMap.erase(id) == 0 ){
 		return FALSE;
 	}
 
 	UpdateEnableDecodeFlag();
-	UpdateServiceUtil(TRUE);
+	UpdateFilterServiceID();
 
 	return TRUE;
 }
@@ -623,7 +594,7 @@ BOOL CTSOut::SetServiceID(
 	WORD serviceID
 	)
 {
-	CBlockLock lock(&this->objLock);
+	lock_recursive_mutex lock(this->objLock);
 
 	auto itr = serviceUtilMap.find(id);
 	if( itr == serviceUtilMap.end() ){
@@ -631,7 +602,7 @@ BOOL CTSOut::SetServiceID(
 	}
 
 	itr->second->SetSID(serviceID);
-	UpdateServiceUtil(TRUE);
+	UpdateFilterServiceID();
 
 	return TRUE;
 }
@@ -641,7 +612,7 @@ BOOL CTSOut::GetServiceID(
 	WORD* serviceID
 	)
 {
-	CBlockLock lock(&this->objLock);
+	lock_recursive_mutex lock(this->objLock);
 
 	auto itr = serviceUtilMap.find(id);
 	if( itr == serviceUtilMap.end() ){
@@ -654,18 +625,12 @@ BOOL CTSOut::GetServiceID(
 	return TRUE;
 }
 
-//UDPで送信を行う
-//戻り値：
-// TRUE（成功）、FALSE（失敗）
-//引数：
-// id			[IN]制御識別ID
-// sendList		[IN/OUT]送信先リスト。NULLで停止。Portは実際に送信に使用したPortが返る。
 BOOL CTSOut::SendUdp(
 	DWORD id,
 	vector<NW_SEND_INFO>* sendList
 	)
 {
-	CBlockLock lock(&this->objLock);
+	lock_recursive_mutex lock(this->objLock);
 
 	auto itr = serviceUtilMap.find(id);
 	if( itr == serviceUtilMap.end() ){
@@ -677,18 +642,12 @@ BOOL CTSOut::SendUdp(
 	return TRUE;
 }
 
-//TCPで送信を行う
-//戻り値：
-// TRUE（成功）、FALSE（失敗）
-//引数：
-// id			[IN]制御識別ID
-// sendList		[IN/OUT]送信先リスト。NULLで停止。Portは実際に送信に使用したPortが返る。
 BOOL CTSOut::SendTcp(
 	DWORD id,
 	vector<NW_SEND_INFO>* sendList
 	)
 {
-	CBlockLock lock(&this->objLock);
+	lock_recursive_mutex lock(this->objLock);
 
 	auto itr = serviceUtilMap.find(id);
 	if( itr == serviceUtilMap.end() ){
@@ -717,7 +676,7 @@ DWORD CTSOut::GetEpgInfo(
 	EPGDB_EVENT_INFO* epgInfo
 	)
 {
-	CBlockLock lock(&this->epgUtilLock);
+	lock_recursive_mutex lock(this->epgUtilLock);
 
 	EPG_EVENT_INFO* _epgInfo;
 	DWORD err = this->epgUtil.GetEpgInfo(originalNetworkID, transportStreamID, serviceID, nextFlag, &_epgInfo);
@@ -747,7 +706,7 @@ DWORD CTSOut::SearchEpgInfo(
 	EPGDB_EVENT_INFO* epgInfo
 	)
 {
-	CBlockLock lock(&this->epgUtilLock);
+	lock_recursive_mutex lock(this->epgUtilLock);
 
 	EPG_EVENT_INFO* _epgInfo;
 	DWORD err = this->epgUtil.SearchEpgInfo(originalNetworkID, transportStreamID, serviceID, eventID, pfOnlyFlag, &_epgInfo);
@@ -764,7 +723,7 @@ DWORD CTSOut::SearchEpgInfo(
 int CTSOut::GetTimeDelay(
 	)
 {
-	CBlockLock lock(&this->epgUtilLock);
+	lock_recursive_mutex lock(this->epgUtilLock);
 
 	return this->epgUtil.GetTimeDelay();
 }
@@ -774,10 +733,10 @@ int CTSOut::GetTimeDelay(
 // TRUE（録画中）、FALSE（していない）
 BOOL CTSOut::IsRec()
 {
-	CBlockLock lock(&this->objLock);
+	lock_recursive_mutex lock(this->objLock);
 
-	for( auto itr = this->serviceUtilMap.begin(); itr != this->serviceUtilMap.end(); itr++ ){
-		if( itr->second->IsRec() == TRUE ){
+	for( const auto& item : this->serviceUtilMap ){
+		if( item.second->IsRec() == TRUE ){
 			return TRUE;
 		}
 	}
@@ -791,7 +750,7 @@ BOOL CTSOut::StartSave(
 	int maxBuffCount
 )
 {
-	CBlockLock lock(&this->objLock);
+	lock_recursive_mutex lock(this->objLock);
 
 	auto itr = serviceUtilMap.find(recParam.ctrlID);
 	if( itr == serviceUtilMap.end() ){
@@ -806,7 +765,7 @@ BOOL CTSOut::EndSave(
 	BOOL* subRecFlag
 	)
 {
-	CBlockLock lock(&this->objLock);
+	lock_recursive_mutex lock(this->objLock);
 	auto itr = serviceUtilMap.find(id);
 	if( itr == serviceUtilMap.end() ){
 		return FALSE;
@@ -825,7 +784,7 @@ BOOL CTSOut::SetScramble(
 	BOOL enable
 	)
 {
-	CBlockLock lock(&this->objLock);
+	lock_recursive_mutex lock(this->objLock);
 
 	auto itr = serviceUtilMap.find(id);
 	if( itr == serviceUtilMap.end() ){
@@ -841,18 +800,18 @@ BOOL CTSOut::UpdateEnableDecodeFlag()
 {
 	BOOL sendUdpTcpOnly = TRUE;
 	BOOL enable = FALSE;
-	for( auto itr = this->serviceUtilMap.begin(); itr != this->serviceUtilMap.end(); itr++ ){
-		if( itr->second->GetScramble() >= 0 ){
-			if( itr->second->GetSendUdpTcp() ){
+	for( const auto& item : this->serviceUtilMap ){
+		if( item.second->GetScramble() >= 0 ){
+			if( item.second->GetSendUdpTcp() ){
 				//UDP/TCP送信用だけのときはその設定値に従う
-				if( sendUdpTcpOnly && itr->second->GetScramble() ){
+				if( sendUdpTcpOnly && item.second->GetScramble() ){
 					enable = TRUE;
 				}
 			}else{
 				//録画用のものがあるときはその設定値に従う
 				sendUdpTcpOnly = FALSE;
 				enable = FALSE;
-				if( itr->second->GetScramble() ){
+				if( item.second->GetScramble() ){
 					enable = TRUE;
 					break;
 				}
@@ -890,7 +849,7 @@ void CTSOut::SetServiceMode(
 	BOOL enableData
 	)
 {
-	CBlockLock lock(&this->objLock);
+	lock_recursive_mutex lock(this->objLock);
 
 	auto itr = serviceUtilMap.find(id);
 	if( itr != serviceUtilMap.end() ){
@@ -905,7 +864,7 @@ void CTSOut::ClearErrCount(
 	DWORD id
 	)
 {
-	CBlockLock lock(&this->objLock);
+	lock_recursive_mutex lock(this->objLock);
 
 	auto itr = serviceUtilMap.find(id);
 	if( itr != serviceUtilMap.end() ){
@@ -924,7 +883,7 @@ void CTSOut::GetErrCount(
 	ULONGLONG* scramble
 	)
 {
-	CBlockLock lock(&this->objLock);
+	lock_recursive_mutex lock(this->objLock);
 
 	auto itr = serviceUtilMap.find(id);
 	if( itr != serviceUtilMap.end() ){
@@ -939,10 +898,10 @@ void CTSOut::GetErrCount(
 // writeSize			[OUT]出力サイズ
 void CTSOut::GetRecWriteSize(
 	DWORD id,
-	__int64* writeSize
+	LONGLONG* writeSize
 	)
 {
-	CBlockLock lock(&this->objLock);
+	lock_recursive_mutex lock(this->objLock);
 
 	auto itr = serviceUtilMap.find(id);
 	if( itr != serviceUtilMap.end() ){
@@ -950,18 +909,11 @@ void CTSOut::GetRecWriteSize(
 	}
 }
 
-void CTSOut::ResetErrCount()
-{
-	for( auto itr = serviceUtilMap.begin(); itr != serviceUtilMap.end(); itr++ ){
-		itr->second->ClearErrCount();
-	}
-}
-
 wstring CTSOut::GetSaveFilePath(
 	DWORD id
 	)
 {
-	CBlockLock lock(&this->objLock);
+	lock_recursive_mutex lock(this->objLock);
 
 	auto itr = serviceUtilMap.find(id);
 	if( itr != serviceUtilMap.end() ){
@@ -980,7 +932,7 @@ void CTSOut::SaveErrCount(
 	ULONGLONG& scramble
 	)
 {
-	CBlockLock lock(&this->objLock);
+	lock_recursive_mutex lock(this->objLock);
 
 	auto itr = serviceUtilMap.find(id);
 	if( itr != serviceUtilMap.end() ){
@@ -992,10 +944,10 @@ void CTSOut::SetSignalLevel(
 	float signalLv
 	)
 {
-	CBlockLock lock(&this->objLock);
+	lock_recursive_mutex lock(this->objLock);
 
-	for( auto itr = serviceUtilMap.begin(); itr != serviceUtilMap.end(); itr++ ){
-		itr->second->SetSignalLevel(signalLv);
+	for( const auto& item : this->serviceUtilMap ){
+		item.second->SetSignalLevel(signalLv);
 	}
 }
 
@@ -1004,10 +956,10 @@ void CTSOut::SetBonDriver(
 	const wstring& bonDriver
 	)
 {
-	CBlockLock lock(&this->objLock);
+	lock_recursive_mutex lock(this->objLock);
 
-	for( auto itr = serviceUtilMap.begin(); itr != serviceUtilMap.end(); itr++ ){
-		itr->second->SetBonDriver(bonDriver);
+	for( const auto& item : this->serviceUtilMap ){
+		item.second->SetBonDriver(bonDriver);
 	}
 	bonFile = bonDriver;
 }
@@ -1016,10 +968,10 @@ void CTSOut::SetNoLogScramble(
 	BOOL noLog
 	)
 {
-	CBlockLock lock(&this->objLock);
+	lock_recursive_mutex lock(this->objLock);
 
-	for( auto itr = serviceUtilMap.begin(); itr != serviceUtilMap.end(); itr++ ){
-		itr->second->SetNoLogScramble(noLog);
+	for( const auto& item : this->serviceUtilMap ){
+		item.second->SetNoLogScramble(noLog);
 	}
 	noLogScramble = noLog;
 }
@@ -1028,7 +980,7 @@ void CTSOut::SetParseEpgPostProcess(
 	BOOL parsePost
 	)
 {
-	CBlockLock lock(&this->objLock);
+	lock_recursive_mutex lock(this->objLock);
 
 	parseEpgPostProcess = parsePost;
 }

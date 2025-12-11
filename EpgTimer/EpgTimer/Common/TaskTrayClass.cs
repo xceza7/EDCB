@@ -14,7 +14,7 @@ namespace EpgTimer
         void TaskTrayRightClick();
     }
 
-    public class TaskTrayClass : IDisposable
+    sealed class TaskTrayClass : IDisposable
     {
         [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
         private struct NOTIFYICONDATA
@@ -37,11 +37,8 @@ namespace EpgTimer
             public uint dwInfoFlags;
         }
 
-        [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
-        private static extern bool Shell_NotifyIcon(uint dwMessage, [In] ref NOTIFYICONDATA lpData);
-
         private const int WM_APP_TRAY = 0x8100;
-        private static Dictionary<TaskTrayClass, HwndSource> hwndDictionary;
+        private HwndSource hwndSource;
         private Window targetWindow;
         private HwndSourceHook sourceHook;
         private System.Windows.Threading.DispatcherTimer balloonTimer;
@@ -87,19 +84,15 @@ namespace EpgTimer
                     const uint NIF_MESSAGE = 0x01;
                     const uint NIF_ICON = 0x02;
                     const uint NIF_TIP = 0x04;
-                    if (hwndDictionary == null)
-                    {
-                        hwndDictionary = new Dictionary<TaskTrayClass, HwndSource>();
-                    }
-                    if (hwndDictionary.ContainsKey(this) == false)
+                    if (hwndSource == null)
                     {
                         // ネイティブウィンドウがなければ生成する(PresentationSourceがこれで取得可能になるわけではないので注意)
-                        hwndDictionary[this] = HwndSource.FromHwnd(new WindowInteropHelper(targetWindow).EnsureHandle());
+                        hwndSource = HwndSource.FromHwnd(new WindowInteropHelper(targetWindow).EnsureHandle());
                     }
                     _visible = true;
                     var nid = new NOTIFYICONDATA();
                     nid.cbSize = Marshal.SizeOf(nid);
-                    nid.hWnd = hwndDictionary[this].Handle;
+                    nid.hWnd = hwndSource.Handle;
                     nid.uID = 1;
                     nid.uFlags = NIF_MESSAGE | NIF_TIP;
                     nid.uCallbackMessage = WM_APP_TRAY;
@@ -109,27 +102,27 @@ namespace EpgTimer
                     if (IconUri != null)
                     {
                         // SystemParametersは論理ピクセル単位
-                        var m = hwndDictionary[this].CompositionTarget.TransformToDevice;
+                        var m = hwndSource.CompositionTarget.TransformToDevice;
                         using (var stream = Application.GetResourceStream(IconUri).Stream)
                         using (var icon = new Icon(stream, ((int)(SystemParameters.SmallIconWidth * m.M11) + 15) / 16 * 16,
                                                            ((int)(SystemParameters.SmallIconHeight * m.M22) + 15) / 16 * 16))
                         {
                             nid.uFlags |= NIF_ICON;
                             nid.hIcon = icon.Handle;
-                            if (Shell_NotifyIcon(1, ref nid) == false)
+                            if (NativeMethods.Shell_NotifyIcon(1, ref nid) == false)
                             {
-                                Shell_NotifyIcon(0, ref nid);
+                                NativeMethods.Shell_NotifyIcon(0, ref nid);
                             }
                         }
                     }
-                    else if (Shell_NotifyIcon(1, ref nid) == false)
+                    else if (NativeMethods.Shell_NotifyIcon(1, ref nid) == false)
                     {
-                        Shell_NotifyIcon(0, ref nid);
+                        NativeMethods.Shell_NotifyIcon(0, ref nid);
                     }
                     if (sourceHook == null && CommonUtil.RegisterTaskbarCreatedWindowMessage() != 0)
                     {
                         sourceHook = WndProc;
-                        hwndDictionary[this].AddHook(sourceHook);
+                        hwndSource.AddHook(sourceHook);
                     }
                 }
                 else if (_visible)
@@ -137,18 +130,18 @@ namespace EpgTimer
                     _visible = false;
                     if (sourceHook != null)
                     {
-                        hwndDictionary[this].RemoveHook(sourceHook);
+                        hwndSource.RemoveHook(sourceHook);
                         sourceHook = null;
                     }
                     var nid = new NOTIFYICONDATA();
                     nid.cbSize = Marshal.SizeOf(nid);
-                    nid.hWnd = hwndDictionary[this].Handle;
+                    nid.hWnd = hwndSource.Handle;
                     nid.uID = 1;
                     nid.uFlags = 0;
                     nid.szTip = "";
                     nid.szInfo = "";
                     nid.szInfoTitle = "";
-                    Shell_NotifyIcon(2, ref nid);
+                    NativeMethods.Shell_NotifyIcon(2, ref nid);
                 }
             }
         }
@@ -162,7 +155,7 @@ namespace EpgTimer
                 const uint NIIF_INFO = 1;
                 var nid = new NOTIFYICONDATA();
                 nid.cbSize = Marshal.SizeOf(nid);
-                nid.hWnd = hwndDictionary[this].Handle;
+                nid.hWnd = hwndSource.Handle;
                 nid.uID = 1;
                 nid.uFlags = NIF_INFO | (BalloonTipRealtime ? NIF_REALTIME : 0);
                 nid.szTip = "";
@@ -170,83 +163,85 @@ namespace EpgTimer
                 nid.uTimeoutOrVersion = (uint)timeOutMSec;
                 nid.szInfoTitle = title.Length > 63 ? title.Substring(0, 60) + "..." : title;
                 nid.dwInfoFlags = NIIF_INFO;
-                Shell_NotifyIcon(1, ref nid);
+                NativeMethods.Shell_NotifyIcon(1, ref nid);
             }
         }
 
         public void Dispose()
         {
             Visible = false;
-            if (hwndDictionary != null)
-            {
-                // FromHwnd(targetWindow)で得たHwndSourceはtargetWindowに紐づいた共有物なのでDispose()してはいけない
-                hwndDictionary.Remove(this);
-            }
+            // FromHwnd(targetWindow)で得たHwndSourceはtargetWindowに紐づいた共有物なのでDispose()してはいけない
+            hwndSource = null;
         }
 
-        private static IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+        private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
         {
-            TaskTrayClass self = hwndDictionary.SingleOrDefault(a => a.Value.Handle == hwnd).Key;
-            if (msg == WM_APP_TRAY && self != null)
+            if (msg == WM_APP_TRAY)
             {
                 const int WM_LBUTTONUP = 0x0202;
                 const int WM_RBUTTONUP = 0x0205;
                 const int NIN_BALLOONSHOW = 0x0402;
                 const int NIN_BALLOONHIDE = 0x0403;
                 const int NIN_BALLOONTIMEOUT = 0x0404;
-                switch (lParam.ToInt32() & 0xFFFF)
+                switch (lParam.ToInt64() & 0xFFFF)
                 {
                     case WM_LBUTTONUP:
-                        if (self.targetWindow is ITaskTrayClickHandler)
+                        if (targetWindow is ITaskTrayClickHandler)
                         {
-                            ((ITaskTrayClickHandler)self.targetWindow).TaskTrayLeftClick();
+                            ((ITaskTrayClickHandler)targetWindow).TaskTrayLeftClick();
                         }
                         break;
                     case WM_RBUTTONUP:
-                        if (self.targetWindow is ITaskTrayClickHandler)
+                        if (targetWindow is ITaskTrayClickHandler)
                         {
-                            ((ITaskTrayClickHandler)self.targetWindow).TaskTrayRightClick();
+                            ((ITaskTrayClickHandler)targetWindow).TaskTrayRightClick();
                         }
                         break;
                     case NIN_BALLOONSHOW:
-                        if (self.ForceHideBalloonTipSec > 0)
+                        if (ForceHideBalloonTipSec > 0)
                         {
                             // 指定タイムアウトでバルーンチップを強制的に閉じる
-                            if (self.balloonTimer == null)
+                            if (balloonTimer == null)
                             {
-                                self.balloonTimer = new System.Windows.Threading.DispatcherTimer();
-                                self.balloonTimer.Tick += (sender, e) =>
+                                balloonTimer = new System.Windows.Threading.DispatcherTimer();
+                                balloonTimer.Tick += (sender, e) =>
                                 {
-                                    if (self.Visible)
+                                    if (Visible)
                                     {
-                                        self.Visible = false;
-                                        self.Visible = true;
+                                        Visible = false;
+                                        Visible = true;
                                     }
-                                    self.balloonTimer.Stop();
+                                    balloonTimer.Stop();
                                 };
                             }
-                            self.balloonTimer.Interval = TimeSpan.FromSeconds(self.ForceHideBalloonTipSec);
-                            self.balloonTimer.Start();
+                            balloonTimer.Interval = TimeSpan.FromSeconds(ForceHideBalloonTipSec);
+                            balloonTimer.Start();
                         }
                         break;
                     case NIN_BALLOONHIDE:
                     case NIN_BALLOONTIMEOUT:
-                        if (self.balloonTimer != null)
+                        if (balloonTimer != null)
                         {
-                            self.balloonTimer.Stop();
+                            balloonTimer.Stop();
                         }
                         break;
                 }
             }
-            else if (msg == (int)CommonUtil.RegisterTaskbarCreatedWindowMessage() && self != null)
+            else if (msg == (int)CommonUtil.RegisterTaskbarCreatedWindowMessage())
             {
-                self.Visible = self.Visible;
+                Visible = Visible;
             }
             return IntPtr.Zero;
         }
+
+        private static class NativeMethods
+        {
+            [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+            public static extern bool Shell_NotifyIcon(uint dwMessage, [In] ref NOTIFYICONDATA lpData);
+        }
     }
 
-    public static class TrayManager
+    sealed class TrayManager
     {
         static TrayManager() { Tray = new TaskTrayClass(CommonManager.MainWindow); }
         public static TaskTrayClass Tray { get; private set; }

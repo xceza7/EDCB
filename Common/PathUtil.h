@@ -3,6 +3,20 @@
 
 #include <functional>
 
+#ifdef _WIN32
+#define EDCB_LIB_EXT L".dll"
+#else
+#ifndef EDCB_INI_ROOT
+#define EDCB_INI_ROOT L"/var/local/edcb"
+#endif
+#ifndef EDCB_LIB_ROOT
+#define EDCB_LIB_ROOT L"/usr/local/lib/edcb"
+#endif
+#ifndef EDCB_LIB_EXT
+#define EDCB_LIB_EXT L".so"
+#endif
+#endif
+
 namespace filesystem_
 {
 // Extract from Boost.Filesystem(1.64.0) www.boost.org/libs/filesystem
@@ -78,6 +92,8 @@ typedef filesystem_::path fs_path;
 //#include <filesystem>
 //typedef std::experimental::filesystem::path fs_path;
 
+typedef std::unique_ptr<void, void (*)(void*)> util_unique_handle;
+
 enum {
 	UTIL_O_RDONLY = 1, // r
 	UTIL_O_RDWR = 3, // r+
@@ -97,8 +113,20 @@ enum {
 };
 
 // ファイルを開く(継承不能、共有モード制御可)
-FILE* UtilOpenFile(const wstring& path, int flags);
-inline FILE* UtilOpenFile(const fs_path& path, int flags) { return UtilOpenFile(path.native(), flags); }
+FILE* UtilOpenFile(const wstring& path, int flags, int* apiError = NULL);
+inline FILE* UtilOpenFile(const fs_path& path, int flags, int* apiError = NULL) { return UtilOpenFile(path.native(), flags, apiError); }
+
+// 共有ライブラリをロードする
+void* UtilLoadLibrary(const wstring& path);
+inline void* UtilLoadLibrary(const fs_path& path) { return UtilLoadLibrary(path.native()); }
+
+// 共有ライブラリを解放する
+void UtilFreeLibrary(void* hModule);
+
+// 共有ライブラリのエクスポート関数や変数のアドレスを取得する
+void* UtilGetProcAddress(void* hModule, const char* name);
+template<class T>
+bool UtilGetProcAddress(void* hModule, const char* name, T& proc) { return (proc = (T)UtilGetProcAddress(hModule, name)) != NULL; }
 
 #ifndef _WIN32
 BOOL DeleteFile(LPCWSTR path);
@@ -110,8 +138,8 @@ fs_path GetSettingPath();
 fs_path GetModulePath(HMODULE hModule = NULL);
 fs_path GetModuleIniPath(HMODULE hModule = NULL);
 #else
-fs_path GetModulePath();
-fs_path GetModuleIniPath(LPCWSTR moduleName = NULL);
+fs_path GetModulePath(void* funcAddr = NULL);
+fs_path GetModuleIniPath(void* funcAddr = NULL);
 #endif
 fs_path GetCommonIniPath();
 fs_path GetRecFolderPath(int index = 0);
@@ -129,14 +157,13 @@ bool UtilCreateDirectory(const fs_path& path);
 // 再帰的にディレクトリを生成する
 bool UtilCreateDirectories(const fs_path& path);
 // フォルダがあるストレージの空き容量を取得する。失敗時は負値
-__int64 UtilGetStorageFreeBytes(const fs_path& directoryPath);
+LONGLONG UtilGetStorageFreeBytes(const fs_path& directoryPath);
 // フォルダがあるストレージの識別子を取得する。失敗時は空
 wstring UtilGetStorageID(const fs_path& directoryPath);
+// グローバルミューテックスを生成する。失敗時(既に存在するときを含む)やname未指定のときは空のハンドルを返す
+util_unique_handle UtilCreateGlobalMutex(LPCWSTR name = NULL, bool* alreadyExists = NULL);
 
-#ifdef _WIN32
-// 必要なバッファを確保してGetPrivateProfileSection()を呼ぶ
-vector<WCHAR> GetPrivateProfileSectionBuffer(LPCWSTR appName, LPCWSTR fileName);
-#else
+#ifndef _WIN32
 int GetPrivateProfileInt(LPCWSTR appName, LPCWSTR keyName, int nDefault, LPCWSTR fileName);
 BOOL WritePrivateProfileString(LPCWSTR appName, LPCWSTR keyName, LPCWSTR lpString, LPCWSTR fileName);
 #endif
@@ -145,8 +172,8 @@ BOOL WritePrivateProfileInt(LPCWSTR appName, LPCWSTR keyName, int value, LPCWSTR
 
 struct UTIL_FIND_DATA {
 	bool isDir;
-	__int64 lastWriteTime;
-	__int64 fileSize;
+	LONGLONG lastWriteTime;
+	LONGLONG fileSize;
 	wstring fileName;
 };
 

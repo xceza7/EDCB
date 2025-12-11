@@ -32,6 +32,7 @@ namespace EpgTimer
             else if (v is ushort) Stream.Write(BitConverter.GetBytes((ushort)v), 0, 2);
             else if (v is int) Stream.Write(BitConverter.GetBytes((int)v), 0, 4);
             else if (v is uint) Stream.Write(BitConverter.GetBytes((uint)v), 0, 4);
+            else if (v is float) Stream.Write(BitConverter.GetBytes((float)v), 0, 4);
             else if (v is long) Stream.Write(BitConverter.GetBytes((long)v), 0, 8);
             else if (v is ulong) Stream.Write(BitConverter.GetBytes((ulong)v), 0, 8);
             else if (v is ICtrlCmdReadWrite) ((ICtrlCmdReadWrite)v).Write(Stream, Version);
@@ -115,6 +116,14 @@ namespace EpgTimer
             }
             return buff;
         }
+        /// <summary>配列のサイズだけストリームから読み込む</summary>
+        public void ReadToArray(byte[] v)
+        {
+            if (Stream.Read(v, 0, v.Length) != v.Length)
+            {
+                throw new EndOfStreamException();
+            }
+        }
         /// <summary>ストリームから読み込む</summary>
         public void Read(ref byte v) { v = ReadBytes(1)[0]; }
         /// <summary>ストリームから読み込む</summary>
@@ -123,6 +132,8 @@ namespace EpgTimer
         public void Read(ref int v) { v = BitConverter.ToInt32(ReadBytes(4), 0); }
         /// <summary>ストリームから読み込む</summary>
         public void Read(ref uint v) { v = BitConverter.ToUInt32(ReadBytes(4), 0); }
+        /// <summary>ストリームから読み込む</summary>
+        public void Read(ref float v) { v = BitConverter.ToSingle(ReadBytes(4), 0); }
         /// <summary>ストリームから読み込む</summary>
         public void Read(ref long v) { v = BitConverter.ToInt64(ReadBytes(8), 0); }
         /// <summary>ストリームから読み込む</summary>
@@ -141,6 +152,7 @@ namespace EpgTimer
             else if (v is ushort) v = (T)(object)BitConverter.ToUInt16(ReadBytes(2), 0);
             else if (v is int) v = (T)(object)BitConverter.ToInt32(ReadBytes(4), 0);
             else if (v is uint) v = (T)(object)BitConverter.ToUInt32(ReadBytes(4), 0);
+            else if (v is float) v = (T)(object)BitConverter.ToSingle(ReadBytes(4), 0);
             else if (v is long) v = (T)(object)BitConverter.ToInt64(ReadBytes(8), 0);
             else if (v is ulong) v = (T)(object)BitConverter.ToUInt64(ReadBytes(8), 0);
             else if (v is ICtrlCmdReadWrite) ((ICtrlCmdReadWrite)v).Read(Stream, Version);
@@ -261,6 +273,8 @@ namespace EpgTimer
         CMD_EPG_SRV_UNREGIST_GUI_TCP = 8,
         /// <summary>TCP接続のGUIアプリケーションのIPとポートの登録状況確認</summary>
         CMD_EPG_SRV_ISREGIST_GUI_TCP = 9,
+        /// <summary>ViewアプリのSrvPipeストリームを転送する</summary>
+        CMD_EPG_SRV_RELAY_VIEW_STREAM = 301,
         /// <summary>予約一覧取得</summary>
         CMD_EPG_SRV_ENUM_RESERVE = 1011,
         /// <summary>予約情報取得</summary>
@@ -335,6 +349,10 @@ namespace EpgTimer
         CMD_EPG_SRV_SEARCH_PG_BYKEY2 = 2127,
         /// <summary>番組情報一覧取得</summary>
         CMD_EPG_SRV_ENUM_PG_ALL = 1026,
+        /// <summary>番組情報の最小開始時間と最大開始時間を取得する</summary>
+        CMD_EPG_SRV_GET_PG_INFO_MINMAX = 1028,
+        /// <summary>サービス指定と時間指定で番組情報一覧を取得する</summary>
+        CMD_EPG_SRV_ENUM_PG_INFO_EX = 1029,
         /// <summary>サービス指定と時間指定で過去番組情報一覧を取得する</summary>
         CMD_EPG_SRV_ENUM_PG_ARC = 1030,
         /// <summary>自動予約登録の条件一覧取得</summary>
@@ -369,16 +387,22 @@ namespace EpgTimer
         CMD_EPG_SRV_ENUM_PLUGIN = 1061,
         /// <summary>TVTestのチャンネル切り替え用の情報を取得する</summary>
         CMD_EPG_SRV_GET_CHG_CH_TVTEST = 1062,
-        /// <summary>保存された情報通知ログを取得する</summary>
-        CMD_EPG_SRV_GET_NOTIFY_LOG = 1065,
         /// <summary>設定ファイル(ini)の更新を通知させる</summary>
         CMD_EPG_SRV_PROFILE_UPDATE = 1063,
-        /// <summary>ネットワークモードのEpgDataCap_Bonのチャンネルを切り替え</summary>
+        /// <summary>保存された情報通知ログを取得する</summary>
+        CMD_EPG_SRV_GET_NOTIFY_LOG = 1065,
+        /// <summary>起動中のチューナーについてサーバーが把握している情報の一覧を取得する</summary>
+        CMD_EPG_SRV_ENUM_TUNER_PROCESS = 1066,
+        /// <summary>NetworkTVモードのViewアプリのチャンネルを切り替え（ID=0のみ）</summary>
         CMD_EPG_SRV_NWTV_SET_CH = 1070,
-        /// <summary>ネットワークモードで起動中のEpgDataCap_Bonを終了</summary>
+        /// <summary>NetworkTVモードで起動中のViewアプリを終了（ID=0のみ）</summary>
         CMD_EPG_SRV_NWTV_CLOSE = 1071,
-        /// <summary>ネットワークモードで起動するときのモード（1:UDP 2:TCP 3:UDP+TCP）</summary>
+        /// <summary>NetworkTVモードで起動するときの送信モード（1:UDP 2:TCP 3:UDP+TCP）</summary>
         CMD_EPG_SRV_NWTV_MODE = 1072,
+        /// <summary>NetworkTVモードのViewアプリのチャンネルを切り替え、または起動の確認（ID指定）</summary>
+        CMD_EPG_SRV_NWTV_ID_SET_CH = 1073,
+        /// <summary>NetworkTVモードで起動中のViewアプリを終了（ID指定）</summary>
+        CMD_EPG_SRV_NWTV_ID_CLOSE = 1074,
         /// <summary>ストリーム配信用ファイルを開く</summary>
         CMD_EPG_SRV_NWPLAY_OPEN = 1080,
         /// <summary>ストリーム配信用ファイルを閉じる</summary>
@@ -566,6 +590,10 @@ namespace EpgTimer
         public ErrCode SendSearchPgMinimum(List<EpgSearchKeyInfo> key, ref List<EpgEventInfoMinimum> val) { object o = val; return SendAndReceiveCmdData(CtrlCmd.CMD_EPG_SRV_SEARCH_PG, key, ref o); }
         /// <summary>番組情報一覧を取得する</summary>
         public ErrCode SendEnumPgAll(ref List<EpgServiceEventInfo> val) { object o = val;  return ReceiveCmdData(CtrlCmd.CMD_EPG_SRV_ENUM_PG_ALL, ref o); }
+        /// <summary>番組情報の最小開始時間と最大開始時間を取得する</summary>
+        public ErrCode SendGetPgInfoMinMax(List<long> key, ref List<long> val) { object o = val; return SendAndReceiveCmdData(CtrlCmd.CMD_EPG_SRV_GET_PG_INFO_MINMAX, key, ref o); }
+        /// <summary>サービス指定と時間指定で番組情報一覧を取得する</summary>
+        public ErrCode SendEnumPgInfoEx(List<long> keyAndRange, ref List<EpgServiceEventInfo> val) { object o = val; return SendAndReceiveCmdData(CtrlCmd.CMD_EPG_SRV_ENUM_PG_INFO_EX, keyAndRange, ref o); }
         /// <summary>サービス指定と時間指定で過去番組情報一覧を取得する</summary>
         public ErrCode SendEnumPgArc(List<long> keyAndRange, ref List<EpgServiceEventInfo> val) { object o = val; return SendAndReceiveCmdData(CtrlCmd.CMD_EPG_SRV_ENUM_PG_ARC, keyAndRange, ref o); }
         /// <summary>自動予約登録条件を削除する</summary>
@@ -584,12 +612,18 @@ namespace EpgTimer
         public ErrCode SendGetNotifyLog(int val, ref string resVal) { object o = resVal; var ret = SendAndReceiveCmdData(CtrlCmd.CMD_EPG_SRV_GET_NOTIFY_LOG, val, ref o); resVal = (string)o; return ret; }
         /// <summary>設定ファイル(ini)の更新を通知させる</summary>
         public ErrCode SendNotifyProfileUpdate(string val = "EpgTimer") { return SendCmdData(CtrlCmd.CMD_EPG_SRV_PROFILE_UPDATE, val); }
-        /// <summary>ネットワークモードのEpgDataCap_Bonのチャンネルを切り替え</summary>
+        /// <summary>起動中のチューナーについてサーバーが把握している情報の一覧を取得する</summary>
+        public ErrCode SendEnumTunerProcess(ref List<TunerProcessStatusInfo> resVal) { object o = resVal; return ReceiveCmdData(CtrlCmd.CMD_EPG_SRV_ENUM_TUNER_PROCESS, ref o); }
+        /// <summary>NetworkTVモードのViewアプリのチャンネルを切り替え（ID=0のみ）</summary>
         public ErrCode SendNwTVSetCh(SetChInfo val) { return SendCmdData(CtrlCmd.CMD_EPG_SRV_NWTV_SET_CH, val); }
-        /// <summary>ネットワークモードで起動中のEpgDataCap_Bonを終了</summary>
+        /// <summary>NetworkTVモードで起動中のViewアプリを終了（ID=0のみ）</summary>
         public ErrCode SendNwTVClose() { return SendCmdWithoutData(CtrlCmd.CMD_EPG_SRV_NWTV_CLOSE); }
-        /// <summary>ネットワークモードで起動するときのモード</summary>
+        /// <summary>NetworkTVモードで起動するときの送信モード（1:UDP 2:TCP 3:UDP+TCP）</summary>
         public ErrCode SendNwTVMode(uint val) { return SendCmdData(CtrlCmd.CMD_EPG_SRV_NWTV_MODE, val); }
+        /// <summary>NetworkTVモードのViewアプリのチャンネルを切り替え、または起動の確認（ID指定）</summary>
+        public ErrCode SendNwTVIDSetCh(SetChInfo val, ref int processID) { object o = processID; var ret = SendAndReceiveCmdData(CtrlCmd.CMD_EPG_SRV_NWTV_ID_SET_CH, val, ref o); processID = (int)o; return ret; }
+        /// <summary>NetworkTVモードで起動中のViewアプリを終了（ID指定）</summary>
+        public ErrCode SendNwTVIDClose(int nwtvID) { return SendCmdData(CtrlCmd.CMD_EPG_SRV_NWTV_ID_CLOSE, nwtvID); }
         /// <summary>ストリーム配信用ファイルを開く</summary>
         public ErrCode SendNwPlayOpen(string val, ref uint resVal) { object o = resVal; var ret = SendAndReceiveCmdData(CtrlCmd.CMD_EPG_SRV_NWPLAY_OPEN, val, ref o); resVal = (uint)o; return ret; }
         /// <summary>ストリーム配信用ファイルを閉じる</summary>

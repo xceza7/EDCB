@@ -24,7 +24,7 @@ void CEpgDBUtil::SetStreamChangeEvent()
 	//ここで[p/f]のリセットはしない
 }
 
-BOOL CEpgDBUtil::AddEIT(WORD PID, const Desc::CDescriptor& eit, __int64 streamTime)
+BOOL CEpgDBUtil::AddEIT(WORD PID, const Desc::CDescriptor& eit, LONGLONG streamTime)
 {
 	WORD original_network_id = (WORD)eit.GetNumber(Desc::original_network_id);
 	WORD transport_stream_id = (WORD)eit.GetNumber(Desc::transport_stream_id);
@@ -37,7 +37,7 @@ BOOL CEpgDBUtil::AddEIT(WORD PID, const Desc::CDescriptor& eit, __int64 streamTi
 
 	itr = serviceEventMap.find(key);
 	if( itr == serviceEventMap.end() ){
-		serviceInfo = &serviceEventMap.insert(std::make_pair(key, SERVICE_EVENT_INFO())).first->second;
+		serviceInfo = &serviceEventMap.emplace(key, SERVICE_EVENT_INFO()).first->second;
 	}else{
 		serviceInfo = &itr->second;
 	}
@@ -83,7 +83,7 @@ BOOL CEpgDBUtil::AddEIT(WORD PID, const Desc::CDescriptor& eit, __int64 streamTi
 	for( DWORD i = 0; i < eventLoopSize; i++ ){
 		eit.SetLoopIndex(lp, i);
 		WORD event_id = (WORD)eit.GetNumber(Desc::event_id, lp);
-		__int64 start_time = 0;
+		LONGLONG start_time = 0;
 		DWORD mjd = eit.GetNumber(Desc::start_time_mjd, lp);
 		DWORD bcd = eit.GetNumber(Desc::start_time_bcd, lp);
 		if( mjd != 0xFFFF || bcd != 0xFFFFFF ){
@@ -389,72 +389,84 @@ void CEpgDBUtil::AddShortEvent(EPGDB_EVENT_INFO* eventInfo, const Desc::CDescrip
 #endif
 }
 
+void CEpgDBUtil::EscapeHyphenSpaceAndAppend(wstring& text, const wstring& appendText)
+{
+	size_t i = text.size();
+	text += appendText;
+	while( (i = text.find(L'-', i)) != wstring::npos ){
+		if( i == 0 || text[i - 1] == L'\n' ){
+			size_t j = text.find_first_not_of(L'-', i + 1);
+			if( j != wstring::npos && text[j] == L' ' ){
+				text.insert(j, 1, L'-');
+			}
+		}
+		i++;
+	}
+}
+
 BOOL CEpgDBUtil::AddExtEvent(EPGDB_EVENT_INFO* eventInfo, const Desc::CDescriptor& eit, Desc::CDescriptor::CLoopPointer lpParent)
 {
-	{
-		BOOL foundFlag = FALSE;
-		wstring extendText;
+	BOOL foundFlag = FALSE;
+	wstring extendText;
+
+	Desc::CDescriptor::CLoopPointer lp = lpParent;
+	if( eit.EnterLoop(lp) ){
 		vector<BYTE> itemBuff;
 		BOOL itemDescFlag = FALSE;
 		//text_lengthは0で運用される
 
-		Desc::CDescriptor::CLoopPointer lp = lpParent;
-		if( eit.EnterLoop(lp) ){
-			do{
-				if( eit.GetNumber(Desc::descriptor_tag, lp) != Desc::extended_event_descriptor ){
-					continue;
-				}
-				foundFlag = TRUE;
-				Desc::CDescriptor::CLoopPointer lp2 = lp;
-				if( eit.EnterLoop(lp2) ){
-					do{
-						const BYTE* src;
+		do{
+			if( eit.GetNumber(Desc::descriptor_tag, lp) != Desc::extended_event_descriptor ){
+				continue;
+			}
+			foundFlag = TRUE;
+			Desc::CDescriptor::CLoopPointer lp2 = lp;
+			if( eit.EnterLoop(lp2) ){
+				do{
+					//項目名(item_description)と項目記述(item_char)を改行で連結
+					for( int i = 0; i < 2; i++ ){
 						DWORD srcSize;
-						src = eit.GetBinary(Desc::item_description_char, &srcSize, lp2);
+						const BYTE* src = eit.GetBinary(i == 0 ? Desc::item_description_char : Desc::item_char, &srcSize, lp2);
 						if( src && srcSize > 0 ){
-							if( itemDescFlag == FALSE && itemBuff.size() > 0 ){
+							if( itemDescFlag == (i != 0) && itemBuff.size() > 0 ){
 								if( this->arib.PSISI(itemBuff.data(), (DWORD)itemBuff.size(), NULL) ){
-									extendText += this->arib.GetDecodedString();
+									if( itemDescFlag ){
+										extendText += L"- ";
+									}
+									//項目名と区別できるようにエスケープ
+									EscapeHyphenSpaceAndAppend(extendText, this->arib.GetDecodedString());
 								}
 								extendText += L"\r\n";
 								itemBuff.clear();
 							}
-							itemDescFlag = TRUE;
+							itemDescFlag = (i == 0);
 							itemBuff.insert(itemBuff.end(), src, src + srcSize);
 						}
-						src = eit.GetBinary(Desc::item_char, &srcSize, lp2);
-						if( src && srcSize > 0 ){
-							if( itemDescFlag && itemBuff.size() > 0 ){
-								if( this->arib.PSISI(itemBuff.data(), (DWORD)itemBuff.size(), NULL) ){
-									extendText += this->arib.GetDecodedString();
-								}
-								extendText += L"\r\n";
-								itemBuff.clear();
-							}
-							itemDescFlag = FALSE;
-							itemBuff.insert(itemBuff.end(), src, src + srcSize);
-						}
-					}while( eit.NextLoopIndex(lp2) );
-				}
-			}while( eit.NextLoopIndex(lp) );
-		}
+					}
+				}while( eit.NextLoopIndex(lp2) );
+			}
+		}while( eit.NextLoopIndex(lp) );
 
 		if( itemBuff.size() > 0 ){
 			if( this->arib.PSISI(itemBuff.data(), (DWORD)itemBuff.size(), NULL) ){
-				extendText += this->arib.GetDecodedString();
+				if( itemDescFlag ){
+					extendText += L"- ";
+				}
+				//項目名と区別できるようにエスケープ
+				EscapeHyphenSpaceAndAppend(extendText, this->arib.GetDecodedString());
 			}
 			extendText += L"\r\n";
 		}
-
-		if( foundFlag == FALSE ){
-			return FALSE;
-		}
-		eventInfo->hasExtInfo = true;
-#ifdef DEBUG_EIT
-		extendText = g_szDebugEIT + extendText;
-#endif
-		eventInfo->extInfo.text_char.swap(extendText);
 	}
+
+	if( foundFlag == FALSE ){
+		return FALSE;
+	}
+	eventInfo->hasExtInfo = true;
+#ifdef DEBUG_EIT
+	extendText = g_szDebugEIT + extendText;
+#endif
+	eventInfo->extInfo.text_char.swap(extendText);
 
 	return TRUE;
 }
@@ -678,7 +690,7 @@ EPG_SECTION_STATUS CEpgDBUtil::GetSectionStatus(BOOL l_eitFlag)
 
 BOOL CEpgDBUtil::AddServiceListNIT(const Desc::CDescriptor& nit)
 {
-	wstring network_nameW = L"";
+	wstring network_nameW;
 
 	Desc::CDescriptor::CLoopPointer lp;
 	if( nit.EnterLoop(lp) ){
@@ -716,7 +728,7 @@ BOOL CEpgDBUtil::AddServiceListNIT(const Desc::CDescriptor& nit)
 								map<ULONGLONG, BYTE>::iterator itrService;
 								itrService = this->serviceList.find(key);
 								if( itrService == this->serviceList.end() ){
-									this->serviceList.insert(pair<ULONGLONG, BYTE>(key, (BYTE)nit.GetNumber(Desc::service_type, lp3)));
+									this->serviceList.emplace(key, (BYTE)nit.GetNumber(Desc::service_type, lp3));
 								}
 							}while( nit.NextLoopIndex(lp3) );
 						}
@@ -804,10 +816,10 @@ BOOL CEpgDBUtil::AddServiceListSIT(WORD TSID, const Desc::CDescriptor& sit)
 						}
 					}while( sit.NextLoopIndex(lp2) );
 				}
-				info.serviceList.insert(std::make_pair(item.SID, item));
+				info.serviceList.emplace(item.SID, item);
 			}while( sit.NextLoopIndex(lp) );
 		}
-		this->serviceInfoList.insert(std::make_pair(key, info));
+		this->serviceInfoList.emplace(key, info);
 	}
 
 
@@ -822,7 +834,7 @@ BOOL CEpgDBUtil::AddSDT(const Desc::CDescriptor& sdt)
 	if( itrTS == this->serviceInfoList.end() ){
 		DB_TS_INFO info;
 		info.remote_control_key_id = 0;
-		itrTS = this->serviceInfoList.insert(std::make_pair(key, info)).first;
+		itrTS = this->serviceInfoList.emplace(key, info).first;
 	}
 
 	Desc::CDescriptor::CLoopPointer lp;
@@ -860,7 +872,7 @@ BOOL CEpgDBUtil::AddSDT(const Desc::CDescriptor& sdt)
 						item.service_type = (BYTE)sdt.GetNumber(Desc::service_type, lp2);
 					}while( sdt.NextLoopIndex(lp2) );
 				}
-				itrTS->second.serviceList.insert(std::make_pair(item.SID, item));
+				itrTS->second.serviceList.emplace(item.SID, item);
 			}
 		}while( sdt.NextLoopIndex(lp) );
 	}
@@ -942,8 +954,8 @@ BOOL CEpgDBUtil::EnumEpgInfoList(
 	WORD originalNetworkID,
 	WORD transportStreamID,
 	WORD serviceID,
-	BOOL (CALLBACK *enumEpgInfoListProc)(DWORD, EPG_EVENT_INFO*, LPVOID),
-	LPVOID param
+	BOOL (CALLBACK *enumEpgInfoListProc)(DWORD, EPG_EVENT_INFO*, void*),
+	void* param
 	)
 {
 	map<ULONGLONG, SERVICE_EVENT_INFO>::iterator itr =

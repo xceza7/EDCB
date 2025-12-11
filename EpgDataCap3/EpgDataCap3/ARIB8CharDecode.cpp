@@ -4,10 +4,13 @@
 //CP932に存在しない文字も使用する場合はこのマクロを定義する
 //#define ARIB8CHAR_USE_UNICODE
 
-#ifdef ARIB8CHAR_USE_UNICODE
-const WCHAR* const CARIB8CharDecode::TELETEXT_MARK = L"\xD83C\xDE11";
+const WCHAR* const CARIB8CharDecode::TELETEXT_MARK =
+#ifndef ARIB8CHAR_USE_UNICODE
+	L"[字]";
+#elif WCHAR_MAX > 0xFFFF
+	L"\x1F211";
 #else
-const WCHAR* const CARIB8CharDecode::TELETEXT_MARK = L"[字]";
+	L"\xD83C\xDE11";
 #endif
 
 void CARIB8CharDecode::InitPSISI(void)
@@ -37,13 +40,14 @@ void CARIB8CharDecode::InitPSISI(void)
 	m_bCharColorIndex = 0;
 	m_bBackColorIndex = 0;
 	m_bRasterColorIndex = 0;
+	m_bORNColorIndex = 0;
 	m_bDefPalette = 0;
 
 	m_bUnderLine = FALSE;
-	m_bShadow = FALSE;
 	m_bBold = FALSE;
 	m_bItalic = FALSE;
 	m_bFlushMode = 0;
+	m_bORN = 0;
 
 	m_wSWFMode=0;
 	m_wClientX=0;
@@ -66,7 +70,7 @@ void CARIB8CharDecode::InitPSISI(void)
 
 void CARIB8CharDecode::InitCaption(void)
 {
-	m_G0.iMF = MF_JIS_KANJI1;
+	m_G0.iMF = MF_KANJI;
 	m_G0.iMode = MF_MODE_G;
 	m_G0.iByte = 2;
 
@@ -91,13 +95,14 @@ void CARIB8CharDecode::InitCaption(void)
 	m_bCharColorIndex = 7;
 	m_bBackColorIndex = 8;
 	m_bRasterColorIndex = 8;
+	m_bORNColorIndex = 8;
 	m_bDefPalette = 0;
 
 	m_bUnderLine = FALSE;
-	m_bShadow = FALSE;
 	m_bBold = FALSE;
 	m_bItalic = FALSE;
 	m_bFlushMode = 0;
+	m_bORN = 0;
 
 	m_wSWFMode=0;
 	m_wClientX=0;
@@ -209,41 +214,26 @@ BOOL CARIB8CharDecode::Analyze( const BYTE* pbSrc, DWORD dwSrcSize, DWORD* pdwRe
 	DWORD dwReadSize = 0;
 
 	while( dwReadSize < dwSrcSize ){
+		BOOL bRet = FALSE;
 		DWORD dwReadBuff = 0;
 		//1バイト目チェック
 		if( pbSrc[dwReadSize] <= 0x20 ){
 			//C0制御コード
-			BOOL bRet = C0( pbSrc+dwReadSize, dwSrcSize-dwReadSize, &dwReadBuff );
-			dwReadSize += dwReadBuff;
-			if( bRet == FALSE ){
-				return FALSE;
-			}else if( bRet == 2 ){
-				break;
-			}
+			bRet = C0( pbSrc+dwReadSize, dwSrcSize-dwReadSize, &dwReadBuff );
 		}else if( pbSrc[dwReadSize] < 0x7F ){
 			//GL符号領域
-			if( GL_GR( pbSrc+dwReadSize, dwSrcSize-dwReadSize, &dwReadBuff, m_GL ) == FALSE ){
-				return FALSE;
-			}
-			dwReadSize += dwReadBuff;
+			bRet = GL_GR( pbSrc+dwReadSize, dwSrcSize-dwReadSize, &dwReadBuff, m_GL );
 		}else if( pbSrc[dwReadSize] <= 0xA0 ){
 			//C1制御コード
-			BOOL bRet = C1( pbSrc+dwReadSize, dwSrcSize-dwReadSize, &dwReadBuff );
-			dwReadSize += dwReadBuff;
-			if( bRet == FALSE ){
-				return FALSE;
-			}else if( bRet == 2 ){
-				break;
-			}
+			bRet = C1( pbSrc+dwReadSize, dwSrcSize-dwReadSize, &dwReadBuff );
 		}else if( pbSrc[dwReadSize] < 0xFF ){
 			//GR符号領域
-			if( GL_GR( pbSrc+dwReadSize, dwSrcSize-dwReadSize, &dwReadBuff, m_GR ) == FALSE ){
-				return FALSE;
-			}
-			dwReadSize += dwReadBuff;
-		}else{
+			bRet = GL_GR( pbSrc+dwReadSize, dwSrcSize-dwReadSize, &dwReadBuff, m_GR );
+		}
+		if( !bRet ){
 			return FALSE;
 		}
+		dwReadSize += dwReadBuff;
 	}
 
 	*pdwReadSize = dwReadSize;
@@ -256,10 +246,7 @@ BOOL CARIB8CharDecode::C0( const BYTE* pbSrc, DWORD dwSrcSize, DWORD* pdwReadSiz
 		return FALSE;
 	}
 
-	DWORD dwReadSize = 0;
-	DWORD dwReadBuff = 0;
-
-	BOOL bRet = TRUE;
+	DWORD dwReadSize = 1;
 
 	switch(pbSrc[0]){
 	case 0x20:
@@ -270,87 +257,94 @@ BOOL CARIB8CharDecode::C0( const BYTE* pbSrc, DWORD dwSrcSize, DWORD* pdwReadSiz
 		}else{
 			m_strDecode += L' ';
 		}
-		dwReadSize = 1;
 		break;
 	case 0x0D:
 		//APR 改行
 		m_strDecode += L"\r\n";
-		dwReadSize = 1;
 		break;
 	case 0x0E:
 		//LS1 GLにG1セット
 		m_GL = &m_G1;
-		dwReadSize = 1;
 		break;
 	case 0x0F:
 		//LS0 GLにG0セット
 		m_GL = &m_G0;
-		dwReadSize = 1;
 		break;
 	case 0x19:
 		//SS2 シングルシフト
-		//G2で呼ぶ(マクロ展開を考慮してGLは入れ替えない)
-		if( GL_GR( pbSrc+1, dwSrcSize-1, &dwReadBuff, &m_G2 ) == FALSE ){
-			return FALSE;
+		{
+			//G2で呼ぶ(マクロ展開を考慮してGLは入れ替えない)
+			DWORD dwRead;
+			if( GL_GR(pbSrc + dwReadSize, dwSrcSize - dwReadSize, &dwRead, &m_G2) == FALSE ){
+				return FALSE;
+			}
+			dwReadSize += dwRead;
 		}
-		dwReadSize = 1+dwReadBuff;
 		break;
 	case 0x1D:
 		//SS3 シングルシフト
-		//G3で呼ぶ(マクロ展開を考慮してGLは入れ替えない)
-		if( GL_GR( pbSrc+1, dwSrcSize-1, &dwReadBuff, &m_G3 ) == FALSE ){
-			return FALSE;
+		{
+			//G3で呼ぶ(マクロ展開を考慮してGLは入れ替えない)
+			DWORD dwRead;
+			if( GL_GR(pbSrc + dwReadSize, dwSrcSize - dwReadSize, &dwRead, &m_G3) == FALSE ){
+				return FALSE;
+			}
+			dwReadSize += dwRead;
 		}
-		dwReadSize = 1+dwReadBuff;
 		break;
 	case 0x1B:
 		//ESC エスケープシーケンス
-		if( ESC( pbSrc+1, dwSrcSize-1, &dwReadBuff ) == FALSE ){
-			return FALSE;
-		}
-		dwReadSize = 1+dwReadBuff;
-		break;
-	default:
-		//未サポートの制御コード
-		if( pbSrc[0] == 0x16 ){
-			//PAPF
-			if( dwSrcSize < 2 ){
+		{
+			DWORD dwRead;
+			if( ESC(pbSrc + dwReadSize, dwSrcSize - dwReadSize, &dwRead) == FALSE ){
 				return FALSE;
 			}
-			dwReadSize = 2;
-		}else if( pbSrc[0] == 0x1C ){
-			//APS
-			if( dwSrcSize < 3 ){
+			dwReadSize += dwRead;
+		}
+		break;
+	case 0x16:
+		//PAPF 指定動作位置前進
+		if( dwSrcSize <= dwReadSize ){
+			return FALSE;
+		}
+		dwReadSize++;
+		break;
+	case 0x1C:
+		//APS 動作位置指定
+		{
+			if( dwSrcSize <= dwReadSize + 1 ){
 				return FALSE;
 			}
 			CheckModify();
-			m_wPosY=m_wCharH*(pbSrc[1]-0x40);
-			m_wPosX=m_wCharW*(pbSrc[2]-0x40);
+			m_wPosY=m_wCharH*(pbSrc[dwReadSize++]-0x40);
+			m_wPosX=m_wCharW*(pbSrc[dwReadSize++]-0x40);
 			if( m_emStrSize == STR_SMALL || m_emStrSize == STR_MEDIUM ){
 				m_wPosX=m_wPosX/2;
 			}
-			dwReadSize = 3;
-		}else if( pbSrc[0] == 0x0C ){
-			//CS
-			dwReadSize = 1;
+		}
+		break;
+	case 0x0C:
+		//CS
+		{
 			CAPTION_DATA Item;
 			Item.bClear = TRUE;
-			Item.dwWaitTime = m_dwWaitTime*100;
+			Item.dwWaitTime = m_dwWaitTime;
 			if( m_pCaptionList != NULL ){
 				m_pCaptionList->push_back(Item);
 			}
-			bRet = 2;
+			//TODO: 字幕系ではここで初期化動作が必要
 			m_dwWaitTime = 0;
-		}else{
-			//APB、APF、APD、APU
-			dwReadSize = 1;
 		}
+		break;
+	default:
+		//未サポートの制御コード
+		//APB、APF、APD、APU
 		break;
 	}
 
 	*pdwReadSize = dwReadSize;
 
-	return bRet;
+	return TRUE;
 }
 
 BOOL CARIB8CharDecode::C1( const BYTE* pbSrc, DWORD dwSrcSize, DWORD* pdwReadSize )
@@ -358,10 +352,7 @@ BOOL CARIB8CharDecode::C1( const BYTE* pbSrc, DWORD dwSrcSize, DWORD* pdwReadSiz
 	if( dwSrcSize == 0 ){
 		return FALSE;
 	}
-	DWORD dwReadSize = 0;
-	DWORD dwReadBuff = 0;
-
-	BOOL bRet = TRUE;
+	DWORD dwReadSize = 1;
 
 	CheckModify();
 
@@ -369,90 +360,80 @@ BOOL CARIB8CharDecode::C1( const BYTE* pbSrc, DWORD dwSrcSize, DWORD* pdwReadSiz
 	case 0x89:
 		//MSZ 半角指定
 		m_emStrSize = STR_MEDIUM;
-		dwReadSize = 1;
 		break;
 	case 0x8A:
 		//NSZ 全角指定
 		m_emStrSize = STR_NORMAL;
-		dwReadSize = 1;
 		break;
 	case 0x80:
 		//BKF 文字黒
 		m_bCharColorIndex = (m_bDefPalette<<4) | 0x00;
-		dwReadSize = 1;
 		break;
 	case 0x81:
 		//RDF 文字赤
 		m_bCharColorIndex = (m_bDefPalette<<4) | 0x01;
-		dwReadSize = 1;
 		break;
 	case 0x82:
 		//GRF 文字緑
 		m_bCharColorIndex = (m_bDefPalette<<4) | 0x02;
-		dwReadSize = 1;
 		break;
 	case 0x83:
 		//YLF 文字黄
 		m_bCharColorIndex = (m_bDefPalette<<4) | 0x03;
-		dwReadSize = 1;
 		break;
 	case 0x84:
 		//BLF 文字青
 		m_bCharColorIndex = (m_bDefPalette<<4) | 0x04;
-		dwReadSize = 1;
 		break;
 	case 0x85:
 		//MGF 文字マゼンタ
 		m_bCharColorIndex = (m_bDefPalette<<4) | 0x05;
-		dwReadSize = 1;
 		break;
 	case 0x86:
 		//CNF 文字シアン
 		m_bCharColorIndex = (m_bDefPalette<<4) | 0x06;
-		dwReadSize = 1;
 		break;
 	case 0x87:
 		//WHF 文字白
 		m_bCharColorIndex = (m_bDefPalette<<4) | 0x07;
-		dwReadSize = 1;
 		break;
 	case 0x88:
 		//SSZ 小型サイズ
 		m_emStrSize = STR_SMALL;
-		dwReadSize = 1;
 		break;
 	case 0x8B:
 		//SZX 指定サイズ
-		if( dwSrcSize < 2 ) return FALSE;
-		if( pbSrc[1] == 0x60 ){
+		if( dwSrcSize <= dwReadSize ) return FALSE;
+		if( pbSrc[dwReadSize] == 0x60 ){
 			m_emStrSize = STR_MICRO;
-		}else if( pbSrc[1] == 0x41 ){
+		}else if( pbSrc[dwReadSize] == 0x41 ){
 			m_emStrSize = STR_HIGH_W;
-		}else if( pbSrc[1] == 0x44 ){
+		}else if( pbSrc[dwReadSize] == 0x44 ){
 			m_emStrSize = STR_WIDTH_W;
-		}else if( pbSrc[1] == 0x45 ){
+		}else if( pbSrc[dwReadSize] == 0x45 ){
 			m_emStrSize = STR_W;
-		}else if( pbSrc[1] == 0x6B ){
+		}else if( pbSrc[dwReadSize] == 0x6B ){
 			m_emStrSize = STR_SPECIAL_1;
-		}else if( pbSrc[1] == 0x64 ){
+		}else if( pbSrc[dwReadSize] == 0x64 ){
 			m_emStrSize = STR_SPECIAL_2;
 		}
-		dwReadSize = 2;
+		dwReadSize++;
 		break;
 	case 0x90:
 		//COL 色指定
-		if( dwSrcSize < 2 ) return FALSE;
-		if( pbSrc[1] == 0x20 ){
-			if( dwSrcSize < 3 ) return FALSE;
-			dwReadSize = 3;
-			m_bDefPalette = pbSrc[2]&0x07;
+		if( dwSrcSize <= dwReadSize ) return FALSE;
+		if( pbSrc[dwReadSize] == 0x20 ){
+			dwReadSize++;
+			if( dwSrcSize <= dwReadSize ) return FALSE;
+			//規定によりパレットは0から127まで使われる
+			m_bDefPalette = pbSrc[dwReadSize++] & 0x07;
 		}else{
-			switch(pbSrc[1]&0xF0){
+			switch( pbSrc[dwReadSize] & 0xF0 ){
 				case 0x40:
-					m_bCharColorIndex = pbSrc[1]&0x0F;
+					m_bCharColorIndex = (m_bDefPalette<<4) | (pbSrc[dwReadSize]&0x0F);
 					break;
 				case 0x50:
-					m_bBackColorIndex = pbSrc[1]&0x0F;
+					m_bBackColorIndex = (m_bDefPalette<<4) | (pbSrc[dwReadSize]&0x0F);
 					break;
 				case 0x60:
 					//未サポート
@@ -463,37 +444,37 @@ BOOL CARIB8CharDecode::C1( const BYTE* pbSrc, DWORD dwSrcSize, DWORD* pdwReadSiz
 				default:
 					break;
 			}
-			dwReadSize = 2;
+			dwReadSize++;
 		}
 		break;
 	case 0x91:
 		//FLC フラッシング制御
-		if( dwSrcSize < 2 ) return FALSE;
-		if( pbSrc[1] == 0x40 ){
+		if( dwSrcSize <= dwReadSize ) return FALSE;
+		if( pbSrc[dwReadSize] == 0x40 ){
 			m_bFlushMode = 1;
-		}else if( pbSrc[1] == 0x47 ){
+		}else if( pbSrc[dwReadSize] == 0x47 ){
 			m_bFlushMode = 2;
-		}else if( pbSrc[1] == 0x4F ){
+		}else if( pbSrc[dwReadSize] == 0x4F ){
 			m_bFlushMode = 0;
 		}
-		dwReadSize = 2;
+		dwReadSize++;
 		break;
 	case 0x93:
 		//POL パターン極性
 		//未サポート
-		if( dwSrcSize < 2 ) return FALSE;
-		dwReadSize = 2;
+		if( dwSrcSize <= dwReadSize ) return FALSE;
+		dwReadSize++;
 		break;
 	case 0x94:
 		//WMM 書き込みモード変更
 		//未サポート
-		if( dwSrcSize < 2 ) return FALSE;
-		dwReadSize = 2;
+		if( dwSrcSize <= dwReadSize ) return FALSE;
+		dwReadSize++;
 		break;
 	case 0x95:
 		//MACRO マクロ定義
-		//未サポート
-		dwReadSize = 2;
+		//未サポート(MACRO 0x4Fまで送る)
+		dwReadSize++;
 		do{
 			if( ++dwReadSize > dwSrcSize ){
 				return FALSE;
@@ -503,35 +484,31 @@ BOOL CARIB8CharDecode::C1( const BYTE* pbSrc, DWORD dwSrcSize, DWORD* pdwReadSiz
 	case 0x97:
 		//HLC 囲み制御
 		//未サポート
-		if( dwSrcSize < 2 ) return FALSE;
-		dwReadSize = 2;
+		if( dwSrcSize <= dwReadSize ) return FALSE;
+		dwReadSize++;
 		break;
 	case 0x98:
 		//RPC 文字繰り返し
 		//未サポート
-		if( dwSrcSize < 2 ) return FALSE;
-		dwReadSize = 2;
+		if( dwSrcSize <= dwReadSize ) return FALSE;
+		dwReadSize++;
 		break;
 	case 0x99:
 		//SPL アンダーライン モザイクの終了
-		m_bBold = FALSE;
-		bRet = 2;
-		dwReadSize = 1;
+		m_bUnderLine = FALSE;
 		break;
 	case 0x9A:
 		//STL アンダーライン モザイクの開始
-		m_bBold = TRUE;
-		dwReadSize = 1;
+		m_bUnderLine = TRUE;
 		break;
 	case 0x9D:
 		//TIME 時間制御
-		CheckModify();
-		if( dwSrcSize < 3 ) return FALSE;
-		if( pbSrc[1] == 0x20 ){
-			m_dwWaitTime = pbSrc[2]-0x40;
-			dwReadSize = 3;
+		if( dwSrcSize <= dwReadSize + 1 ) return FALSE;
+		if( pbSrc[dwReadSize] == 0x20 ){
+			dwReadSize++;
+			m_dwWaitTime += (pbSrc[dwReadSize++] - 0x40) * 100;
 		}else{
-			dwReadSize = 1;
+			//未サポート
 			do{
 				if( ++dwReadSize > dwSrcSize ){
 					return FALSE;
@@ -541,20 +518,22 @@ BOOL CARIB8CharDecode::C1( const BYTE* pbSrc, DWORD dwSrcSize, DWORD* pdwReadSiz
 		break;
 	case 0x9B:
 		//CSI コントロールシーケンス
-		if( CSI( pbSrc+1, dwSrcSize-1, &dwReadBuff ) == FALSE ){
-			return FALSE;
+		{
+			DWORD dwRead;
+			if( CSI(pbSrc + dwReadSize, dwSrcSize - dwReadSize, &dwRead) == FALSE ){
+				return FALSE;
+			}
+			dwReadSize += dwRead;
 		}
-		dwReadSize = 1+dwReadBuff;
 		break;
 	default:
 		//未サポートの制御コード
-		dwReadSize = 1;
 		break;
 	}
 
 	*pdwReadSize = dwReadSize;
 
-	return bRet;
+	return TRUE;
 }
 
 BOOL CARIB8CharDecode::GL_GR( const BYTE* pbSrc, DWORD dwSrcSize, DWORD* pdwReadSize, const MF_MODE* mode )
@@ -594,8 +573,7 @@ BOOL CARIB8CharDecode::GL_GR( const BYTE* pbSrc, DWORD dwSrcSize, DWORD* pdwRead
 			case MF_HIRA:
 			case MF_PROP_HIRA:
 				{
-				//半角ひらがな
-				//テーブルからコード取得
+				//Gセットのひらがな系集合
 				m_strDecode += HiraTable[b - 0x21];
 				dwReadSize = 1;
 				}
@@ -603,8 +581,7 @@ BOOL CARIB8CharDecode::GL_GR( const BYTE* pbSrc, DWORD dwSrcSize, DWORD* pdwRead
 			case MF_KANA:
 			case MF_PROP_KANA:
 				{
-				//半角カタカナ
-				//テーブルからコード取得
+				//Gセットのカタカナ系集合
 				m_strDecode += KanaTable[b - 0x21];
 				dwReadSize = 1;
 				}
@@ -619,11 +596,23 @@ BOOL CARIB8CharDecode::GL_GR( const BYTE* pbSrc, DWORD dwSrcSize, DWORD* pdwRead
 					return FALSE;
 				}
 				BYTE bSecond = pbSrc[1] & 0x7F;
-				if( b >= 0x21 + 84 || bSecond < 0x21 || bSecond >= 0x21 + 94 ){
-					ToCustomFont(b, bSecond);
+				if( mode->iMF == MF_JIS_KANJI2 ){
+					//JIS互換漢字2面。テーブル未実装
+					m_strDecode += L'〓';
+				}else if( b >= 0x21 + 84 || bSecond < 0x21 || bSecond >= 0x21 + 94 ){
+					if( mode->iMF == MF_JIS_KANJI1 ){
+						//JIS互換漢字1面の第3水準。テーブル未実装
+						m_strDecode += L'〓';
+					}else{
+						ToCustomFont(b, bSecond);
+					}
 				}else{
 					//テーブルからコード取得
 					m_strDecode += m_jisTable[(b - 0x21) * 94 + (bSecond - 0x21)];
+					if( mode->iMF == MF_JIS_KANJI1 && m_strDecode.back() == L'・' && (b != 0x21 || bSecond != 0x21 + 5) ){
+						//JIS互換漢字1面では1区6点以外の・はテーブル未実装
+						m_strDecode.back() = L'〓';
+					}
 				}
 				dwReadSize = 2;
 				}
@@ -683,7 +672,15 @@ BOOL CARIB8CharDecode::ToCustomFont( const BYTE bFirst, const BYTE bSecond )
 		return FALSE;
 	}
 #ifdef ARIB8CHAR_USE_UNICODE
-	m_strDecode += t.strCharUnicode;
+#if WCHAR_MAX > 0xFFFF
+	//テーブル上ではサロゲートペアで表現しているので結合する
+	if( 0xD800 <= (WORD)t.strCharUnicode[0] && (WORD)t.strCharUnicode[0] < 0xDC00 ){
+		m_strDecode += (WCHAR)(0x10000 + ((WORD)t.strCharUnicode[0] - 0xD800) * 0x400 + ((WORD)t.strCharUnicode[1] - 0xDC00));
+	}else
+#endif
+	{
+		m_strDecode += t.strCharUnicode;
+	}
 #else
 	m_strDecode += t.strChar;
 #endif
@@ -983,22 +980,24 @@ BOOL CARIB8CharDecode::CSI( const BYTE* pbSrc, DWORD dwSrcSize, DWORD* pdwReadSi
 			break;
 		case 0x63:
 			//ORN
-			if( wP1 == 0x02 ){
-				m_bShadow = TRUE;
+			if( wP1 <= 3 ){
+				BYTE bIndex = (BYTE)((nParam >= 2 && (wP1 == 1 || wP1 == 2) ? (wP2 / 100) << 4 | (wP2 % 100) : 8) & 0x7F);
+				if( wP1 != m_bORN || bIndex != m_bORNColorIndex ){
+					CheckModify();
+				}
+				m_bORN = (BYTE)wP1;
+				m_bORNColorIndex = bIndex;
 			}
 			break;
 		case 0x64:
 			//MDF
-			if( wP1 == 0 ){
-				m_bBold = FALSE;
-				m_bItalic = FALSE;
-			}else if( wP1 == 1 ){
-				m_bBold = TRUE;
-			}else if( wP1 == 2 ){
-				m_bItalic = TRUE;
-			}else if( wP1 == 3 ){
-				m_bBold = TRUE;
-				m_bItalic = TRUE;
+			if( wP1 <= 3 ){
+				if( ((wP1 & 1) != 0) != m_bBold ||
+				    ((wP1 & 2) != 0) != m_bItalic ){
+					CheckModify();
+				}
+				m_bBold = (wP1 & 1) != 0;
+				m_bItalic = (wP1 & 2) != 0;
 			}
 			break;
 		case 0x66:
@@ -1056,10 +1055,10 @@ void CARIB8CharDecode::CheckModify(void)
 	}
 }
 
-void CARIB8CharDecode::CreateCaptionData(CAPTION_DATA* pItem)
+void CARIB8CharDecode::CreateCaptionData(CAPTION_DATA* pItem) const
 {
 	pItem->bClear = FALSE;
-	pItem->dwWaitTime = m_dwWaitTime*100;
+	pItem->dwWaitTime = m_dwWaitTime;
 	pItem->wSWFMode = m_wSWFMode;
 	pItem->wClientX = m_wClientX;
 	pItem->wClientY = m_wClientY;
@@ -1069,19 +1068,20 @@ void CARIB8CharDecode::CreateCaptionData(CAPTION_DATA* pItem)
 	pItem->wPosY = m_wPosY;
 }
 
-void CARIB8CharDecode::CreateCaptionCharData(CAPTION_CHAR_DATA* pItem)
+void CARIB8CharDecode::CreateCaptionCharData(CAPTION_CHAR_DATA* pItem) const
 {
 	pItem->strDecode = m_strDecode;
 
 	pItem->stCharColor = DefClut[m_bCharColorIndex];
 	pItem->stBackColor = DefClut[m_bBackColorIndex];
 	pItem->stRasterColor = DefClut[m_bRasterColorIndex];
+	pItem->stORNColor = DefClut[m_bORNColorIndex];
 
 	pItem->bUnderLine = m_bUnderLine;
-	pItem->bShadow = m_bShadow;
 	pItem->bBold = m_bBold;
 	pItem->bItalic = m_bItalic;
 	pItem->bFlushMode = m_bFlushMode;
+	pItem->bORN = m_bORN;
 
 	pItem->wCharW = m_wCharW;
 	pItem->wCharH = m_wCharH;
@@ -1314,9 +1314,9 @@ const WCHAR CARIB8CharDecode::JisXKanaTable[94] = {
 
 //デフォルトマクロ文(NULは効果がないと規定されている)
 const BYTE CARIB8CharDecode::DefaultMacro[16][20] = {
-	{0x1B, 0x24, 0x39, 0x1B, 0x29, 0x4A, 0x1B, 0x2A, 0x30, 0x1B, 0x2B, 0x20, 0x70, 0x0F, 0x1B, 0x7D},
-	{0x1B, 0x24, 0x39, 0x1B, 0x29, 0x31, 0x1B, 0x2A, 0x30, 0x1B, 0x2B, 0x20, 0x70, 0x0F, 0x1B, 0x7D},
-	{0x1B, 0x24, 0x39, 0x1B, 0x29, 0x20, 0x41, 0x1B, 0x2A, 0x30, 0x1B, 0x2B, 0x20, 0x70, 0x0F, 0x1B, 0x7D},
+	{0x1B, 0x24, 0x42, 0x1B, 0x29, 0x4A, 0x1B, 0x2A, 0x30, 0x1B, 0x2B, 0x20, 0x70, 0x0F, 0x1B, 0x7D},
+	{0x1B, 0x24, 0x42, 0x1B, 0x29, 0x31, 0x1B, 0x2A, 0x30, 0x1B, 0x2B, 0x20, 0x70, 0x0F, 0x1B, 0x7D},
+	{0x1B, 0x24, 0x42, 0x1B, 0x29, 0x20, 0x41, 0x1B, 0x2A, 0x30, 0x1B, 0x2B, 0x20, 0x70, 0x0F, 0x1B, 0x7D},
 	{0x1B, 0x28, 0x32, 0x1B, 0x29, 0x34, 0x1B, 0x2A, 0x35, 0x1B, 0x2B, 0x20, 0x70, 0x0F, 0x1B, 0x7D},
 	{0x1B, 0x28, 0x32, 0x1B, 0x29, 0x33, 0x1B, 0x2A, 0x35, 0x1B, 0x2B, 0x20, 0x70, 0x0F, 0x1B, 0x7D},
 	{0x1B, 0x28, 0x32, 0x1B, 0x29, 0x20, 0x41, 0x1B, 0x2A, 0x35, 0x1B, 0x2B, 0x20, 0x70, 0x0F, 0x1B, 0x7D},
@@ -1325,9 +1325,9 @@ const BYTE CARIB8CharDecode::DefaultMacro[16][20] = {
 	{0x1B, 0x28, 0x20, 0x47, 0x1B, 0x29, 0x20, 0x48, 0x1B, 0x2A, 0x20, 0x49, 0x1B, 0x2B, 0x20, 0x70, 0x0F, 0x1B, 0x7D},
 	{0x1B, 0x28, 0x20, 0x4A, 0x1B, 0x29, 0x20, 0x4B, 0x1B, 0x2A, 0x20, 0x4C, 0x1B, 0x2B, 0x20, 0x70, 0x0F, 0x1B, 0x7D},
 	{0x1B, 0x28, 0x20, 0x4D, 0x1B, 0x29, 0x20, 0x4E, 0x1B, 0x2A, 0x20, 0x4F, 0x1B, 0x2B, 0x20, 0x70, 0x0F, 0x1B, 0x7D},
-	{0x1B, 0x24, 0x39, 0x1B, 0x29, 0x20, 0x42, 0x1B, 0x2A, 0x30, 0x1B, 0x2B, 0x20, 0x70, 0x0F, 0x1B, 0x7D},
-	{0x1B, 0x24, 0x39, 0x1B, 0x29, 0x20, 0x43, 0x1B, 0x2A, 0x30, 0x1B, 0x2B, 0x20, 0x70, 0x0F, 0x1B, 0x7D},
-	{0x1B, 0x24, 0x39, 0x1B, 0x29, 0x20, 0x44, 0x1B, 0x2A, 0x30, 0x1B, 0x2B, 0x20, 0x70, 0x0F, 0x1B, 0x7D},
+	{0x1B, 0x24, 0x42, 0x1B, 0x29, 0x20, 0x42, 0x1B, 0x2A, 0x30, 0x1B, 0x2B, 0x20, 0x70, 0x0F, 0x1B, 0x7D},
+	{0x1B, 0x24, 0x42, 0x1B, 0x29, 0x20, 0x43, 0x1B, 0x2A, 0x30, 0x1B, 0x2B, 0x20, 0x70, 0x0F, 0x1B, 0x7D},
+	{0x1B, 0x24, 0x42, 0x1B, 0x29, 0x20, 0x44, 0x1B, 0x2A, 0x30, 0x1B, 0x2B, 0x20, 0x70, 0x0F, 0x1B, 0x7D},
 	{0x1B, 0x28, 0x31, 0x1B, 0x29, 0x30, 0x1B, 0x2A, 0x4A, 0x1B, 0x2B, 0x20, 0x70, 0x0F, 0x1B, 0x7D},
 	{0x1B, 0x28, 0x4A, 0x1B, 0x29, 0x32, 0x1B, 0x2A, 0x20, 0x41, 0x1B, 0x2B, 0x20, 0x70, 0x0F, 0x1B, 0x7D}
 };

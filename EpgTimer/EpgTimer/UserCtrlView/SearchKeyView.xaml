@@ -36,12 +36,16 @@
                         <Button DockPanel.Dock="Right" Margin="6,0,0,0" Content="履歴クリア" Name="Button_clearNotKey" />
                         <ComboBox VerticalAlignment="Stretch" Name="comboBox_notKey" KeyUp="comboBox_notKey_KeyUp" IsEditable="True" IsTextSearchEnabled="False" TextBoxBase.TextChanged="ComboBox_TextChanged" />
                     </DockPanel>
-                    <StackPanel KeyboardNavigation.TabNavigation="Once" Margin="15,0,0,0" Orientation="Horizontal" >
+                    <StackPanel KeyboardNavigation.TabNavigation="Once" Margin="15,0,0,4" Orientation="Horizontal" >
                         <CheckBox Content="正規表現モード" Margin="0,0,15,0" Name="checkBox_regExp" />
                         <CheckBox Content="あいまい検索モード" Margin="0,0,15,0" Name="checkBox_aimai" ToolTip="正規表現モードでは無効" IsEnabled="{Binding Path=IsChecked, ElementName=checkBox_regExp, Converter={StaticResource invert}}" />
                         <CheckBox Content="番組名のみ検索対象にする" Margin="0,0,15,0" Name="checkBox_titleOnly" />
                         <CheckBox Content="大小文字区別" Margin="0,0,15,0" Name="checkBox_case" />
                         <CheckBox Content="自動登録を無効にする" Margin="0,0,15,0" Name="checkBox_keyDisabled" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="メモ" Width="80" TextAlignment="Right" Padding="0,0,6,0" />
+                        <TextBox Name="textBox_note" Width="{Binding ActualWidth, ElementName=comboBox_andKey}"/>
                     </StackPanel>
                 </StackPanel>
                 <Border Grid.Row="1" BorderBrush="#FF8C8E94" BorderThickness="0,0,0,1" Margin="0,6"/>

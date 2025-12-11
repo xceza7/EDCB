@@ -8,7 +8,7 @@
 class CEpgDBUtil
 {
 public:
-	BOOL AddEIT(WORD PID, const AribDescriptor::CDescriptor& eit, __int64 streamTime);
+	BOOL AddEIT(WORD PID, const AribDescriptor::CDescriptor& eit, LONGLONG streamTime);
 
 	BOOL AddServiceListNIT(const AribDescriptor::CDescriptor& nit);
 	BOOL AddServiceListSIT(WORD TSID, const AribDescriptor::CDescriptor& sit);
@@ -61,8 +61,8 @@ public:
 		WORD originalNetworkID,
 		WORD transportStreamID,
 		WORD serviceID,
-		BOOL (CALLBACK *enumEpgInfoListProc)(DWORD, EPG_EVENT_INFO*, LPVOID),
-		LPVOID param
+		BOOL (CALLBACK *enumEpgInfoListProc)(DWORD, EPG_EVENT_INFO*, void*),
+		void* param
 		);
 
 	//蓄積されたEPG情報のあるサービス一覧を取得する
@@ -180,6 +180,7 @@ protected:
 	int GetCaptionInfo(const AribDescriptor::CDescriptor& eit, AribDescriptor::CDescriptor::CLoopPointer lp);
 	void AddBasicInfo(EPGDB_EVENT_INFO* eventInfo, const AribDescriptor::CDescriptor& eit, AribDescriptor::CDescriptor::CLoopPointer lpParent, WORD onid, WORD tsid);
 	void AddShortEvent(EPGDB_EVENT_INFO* eventInfo, const AribDescriptor::CDescriptor& eit, AribDescriptor::CDescriptor::CLoopPointer lp);
+	static void EscapeHyphenSpaceAndAppend(wstring& text, const wstring& appendText);
 	BOOL AddExtEvent(EPGDB_EVENT_INFO* eventInfo, const AribDescriptor::CDescriptor& eit, AribDescriptor::CDescriptor::CLoopPointer lpParent);
 	static void AddContent(EPGDB_EVENT_INFO* eventInfo, const AribDescriptor::CDescriptor& eit, AribDescriptor::CDescriptor::CLoopPointer lp);
 	void AddComponent(EPGDB_EVENT_INFO* eventInfo, const AribDescriptor::CDescriptor& eit, AribDescriptor::CDescriptor::CLoopPointer lp);

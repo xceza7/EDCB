@@ -101,6 +101,9 @@
     <ClInclude Include="..\..\Common\SendCtrlCmd.h">
       <Filter>ヘッダー ファイル\Common</Filter>
     </ClInclude>
+    <ClInclude Include="..\..\Common\SendTSTCPDllUtil.h">
+      <Filter>ヘッダー ファイル\Common</Filter>
+    </ClInclude>
     <ClInclude Include="..\..\Common\StringUtil.h">
       <Filter>ヘッダー ファイル\Common</Filter>
     </ClInclude>
@@ -155,12 +158,6 @@
     <ClInclude Include="..\..\BonCtrl\ScrambleDecoderUtil.h">
       <Filter>ヘッダー ファイル\BonCtrl</Filter>
     </ClInclude>
-    <ClInclude Include="..\..\BonCtrl\SendTCP.h">
-      <Filter>ヘッダー ファイル\BonCtrl</Filter>
-    </ClInclude>
-    <ClInclude Include="..\..\BonCtrl\SendUDP.h">
-      <Filter>ヘッダー ファイル\BonCtrl</Filter>
-    </ClInclude>
     <ClInclude Include="..\..\BonCtrl\TSOut.h">
       <Filter>ヘッダー ファイル\BonCtrl</Filter>
     </ClInclude>
@@ -209,6 +206,15 @@
     <ClInclude Include="..\..\Common\StackTrace.h">
       <Filter>ヘッダー ファイル\Common</Filter>
     </ClInclude>
+    <ClInclude Include="..\..\Common\IniUtil.h">
+      <Filter>ヘッダー ファイル\Common</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\Common\MessageManager.h">
+      <Filter>ヘッダー ファイル\Common</Filter>
+    </ClInclude>
+    <ClInclude Include="AppSetting.h">
+      <Filter>ヘッダー ファイル</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="EpgDataCap_Bon.cpp">
@@ -231,6 +237,9 @@
     </ClCompile>
     <ClCompile Include="SetDlgApp.cpp">
       <Filter>ソース ファイル</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\Common\SendTSTCPDllUtil.cpp">
+      <Filter>ソース ファイル\Common</Filter>
     </ClCompile>
     <ClCompile Include="..\..\Common\StringUtil.cpp">
       <Filter>ソース ファイル\Common</Filter>
@@ -286,12 +295,6 @@
     <ClCompile Include="..\..\BonCtrl\ScrambleDecoderUtil.cpp">
       <Filter>ソース ファイル\BonCtrl</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\BonCtrl\SendTCP.cpp">
-      <Filter>ソース ファイル\BonCtrl</Filter>
-    </ClCompile>
-    <ClCompile Include="..\..\BonCtrl\SendUDP.cpp">
-      <Filter>ソース ファイル\BonCtrl</Filter>
-    </ClCompile>
     <ClCompile Include="..\..\BonCtrl\TSOut.cpp">
       <Filter>ソース ファイル\BonCtrl</Filter>
     </ClCompile>
@@ -330,6 +333,15 @@
     </ClCompile>
     <ClCompile Include="..\..\Common\StackTrace.cpp">
       <Filter>ソース ファイル\Common</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\Common\IniUtil.cpp">
+      <Filter>ソース ファイル\Common</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\Common\MessageManager.cpp">
+      <Filter>ソース ファイル\Common</Filter>
+    </ClCompile>
+    <ClCompile Include="AppSetting.cpp">
+      <Filter>ソース ファイル</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>

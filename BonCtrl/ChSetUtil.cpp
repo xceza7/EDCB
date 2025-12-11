@@ -47,7 +47,8 @@ BOOL CChSetUtil::SaveChSet(
 	fs_path chSet5FilePath = fs_path(settingPath).append(L"ChSet5.txt");
 
 	//接続待ち
-	HANDLE waitEvent = CreateEvent(NULL, FALSE, TRUE, CHSET_SAVE_EVENT_WAIT);
+#ifdef _WIN32
+	HANDLE waitEvent = CreateEvent(NULL, FALSE, TRUE, L"Global\\" CHSET_SAVE_EVENT_WAIT);
 	if( waitEvent == NULL ){
 		return FALSE;
 	}
@@ -55,6 +56,17 @@ BOOL CChSetUtil::SaveChSet(
 		CloseHandle(waitEvent);
 		return FALSE;
 	}
+#else
+	//大域的なイベントオブジェクト相当のものは用意していないのでミューテックスを使う
+	util_unique_handle waitMutex = UtilCreateGlobalMutex(CHSET_SAVE_EVENT_WAIT);
+	for( int retry = 0; retry < 30 && !waitMutex; retry++ ){
+		SleepForMsec(100 + 10 * retry);
+		waitMutex = UtilCreateGlobalMutex(CHSET_SAVE_EVENT_WAIT);
+	}
+	if( !waitMutex ){
+		return FALSE;
+	}
+#endif
 
 	BOOL ret = TRUE;
 	this->chText4.SetFilePath(chSet4FilePath.c_str());
@@ -69,9 +81,8 @@ BOOL CChSetUtil::SaveChSet(
 	CParseChText5 mergeChText5;
 	mergeChText5.ParseText(chSet5FilePath.c_str());
 	//現在保持している情報を追加
-	map<LONGLONG, CH_DATA5>::const_iterator itr;
-	for( itr = this->chText5.GetMap().begin(); itr != this->chText5.GetMap().end(); itr++ ){
-		mergeChText5.AddCh(itr->second);
+	for( const auto& ch5 : this->chText5.GetMap() ){
+		mergeChText5.AddCh(ch5.second);
 	}
 	//保存
 	if( mergeChText5.SaveText() == false ){
@@ -80,8 +91,10 @@ BOOL CChSetUtil::SaveChSet(
 	//最新版を再読み込み
 	this->chText5.ParseText(chSet5FilePath.c_str());
 
+#ifdef _WIN32
 	SetEvent(waitEvent);
 	CloseHandle(waitEvent);
+#endif
 
 	return ret;
 }
@@ -152,6 +165,7 @@ BOOL CChSetUtil::AddServiceInfo(
 	item5.partialFlag = FALSE;
 	item5.epgCapFlag = TRUE;
 	item5.searchFlag = TRUE;
+	item5.remoconID = 0;
 	if( serviceInfo->extInfo != NULL ){
 		item5.serviceType = serviceInfo->extInfo->service_type;
 		item5.partialFlag = serviceInfo->extInfo->partialReceptionFlag;
@@ -172,22 +186,6 @@ BOOL CChSetUtil::AddServiceInfo(
 	return TRUE;
 }
 
-
-//サービス一覧を取得する
-BOOL CChSetUtil::GetEnumService(
-	vector<CH_DATA4>* serviceList
-	)
-{
-	if( this->chText4.GetMap().size() == 0 ){
-		return FALSE;
-	}
-	map<DWORD, CH_DATA4>::const_iterator itr;
-	for( itr = this->chText4.GetMap().begin(); itr != this->chText4.GetMap().end(); itr++ ){
-		serviceList->push_back(itr->second);
-	}
-	return TRUE;
-}
-
 //IDから物理チャンネルを検索する
 BOOL CChSetUtil::GetCh(
 	WORD ONID,
@@ -195,18 +193,17 @@ BOOL CChSetUtil::GetCh(
 	WORD SID,
 	DWORD& space,
 	DWORD& ch
-	)
+	) const
 {
 	BOOL ret = FALSE;
-	map<DWORD, CH_DATA4>::const_iterator itr;
-	for( itr = this->chText4.GetMap().begin(); itr != this->chText4.GetMap().end(); itr++ ){
-		if( itr->second.originalNetworkID == ONID && itr->second.transportStreamID == TSID ){
-			if( ret == FALSE || itr->second.serviceID == SID ){
+	for( const auto& ch4 : this->chText4.GetMap() ){
+		if( ch4.second.originalNetworkID == ONID && ch4.second.transportStreamID == TSID ){
+			if( ret == FALSE || ch4.second.serviceID == SID ){
 				ret = TRUE;
-				space = itr->second.space;
-				ch = itr->second.ch;
+				space = ch4.second.space;
+				ch = ch4.second.ch;
 				//SIDが同じものを優先する
-				if( itr->second.serviceID == SID ){
+				if( ch4.second.serviceID == SID ){
 					break;
 				}
 			}
@@ -215,12 +212,11 @@ BOOL CChSetUtil::GetCh(
 	return ret;
 }
 
-vector<SET_CH_INFO> CChSetUtil::GetEpgCapService()
+vector<SET_CH_INFO> CChSetUtil::GetEpgCapService() const
 {
 	vector<SET_CH_INFO> ret;
-	map<DWORD, CH_DATA4>::const_iterator itrCh4;
-	for( itrCh4 = this->chText4.GetMap().begin(); itrCh4 != this->chText4.GetMap().end(); itrCh4++ ){
-		LONGLONG key = Create64Key(itrCh4->second.originalNetworkID, itrCh4->second.transportStreamID, itrCh4->second.serviceID);
+	for( const auto& ch4 : this->chText4.GetMap() ){
+		LONGLONG key = Create64Key(ch4.second.originalNetworkID, ch4.second.transportStreamID, ch4.second.serviceID);
 		map<LONGLONG, CH_DATA5>::const_iterator itrCh5;
 		itrCh5 = this->chText5.GetMap().find(key);
 
@@ -228,8 +224,8 @@ vector<SET_CH_INFO> CChSetUtil::GetEpgCapService()
 			if( itrCh5->second.epgCapFlag == TRUE ){
 				SET_CH_INFO item;
 				item.useBonCh = TRUE;
-				item.space = itrCh4->second.space;
-				item.ch = itrCh4->second.ch;
+				item.space = ch4.second.space;
+				item.ch = ch4.second.ch;
 				if( std::find_if(ret.begin(), ret.end(), [&](const SET_CH_INFO& a) {
 				        return a.space == item.space && a.ch == item.ch; }) == ret.end() ){
 					item.useSID = TRUE;
@@ -247,20 +243,18 @@ vector<SET_CH_INFO> CChSetUtil::GetEpgCapService()
 vector<SET_CH_INFO> CChSetUtil::GetEpgCapServiceAll(
 	int ONID,
 	int TSID
-	)
+	) const
 {
 	vector<SET_CH_INFO> ret;
-	map<LONGLONG, CH_DATA5>::const_iterator itrCh5;
-	for( itrCh5 = this->chText5.GetMap().begin(); itrCh5 != this->chText5.GetMap().end(); itrCh5++ ){
-		if( (ONID < 0 || itrCh5->second.originalNetworkID == ONID) &&
-			(TSID < 0 || itrCh5->second.transportStreamID == TSID) &&
-			itrCh5->second.epgCapFlag == TRUE
-			){
-			ret.push_back(SET_CH_INFO());
+	for( const auto& ch5 : this->chText5.GetMap() ){
+		if( (ONID < 0 || ch5.second.originalNetworkID == ONID) &&
+		    (TSID < 0 || ch5.second.transportStreamID == TSID) &&
+		    ch5.second.epgCapFlag == TRUE ){
+			ret.emplace_back();
 			ret.back().useSID = TRUE;
-			ret.back().ONID = itrCh5->second.originalNetworkID;
-			ret.back().TSID = itrCh5->second.transportStreamID;
-			ret.back().SID = itrCh5->second.serviceID;
+			ret.back().ONID = ch5.second.originalNetworkID;
+			ret.back().TSID = ch5.second.transportStreamID;
+			ret.back().SID = ch5.second.serviceID;
 			ret.back().useBonCh = FALSE;
 		}
 	}
@@ -271,7 +265,7 @@ BOOL CChSetUtil::IsPartial(
 	WORD ONID,
 	WORD TSID,
 	WORD SID
-	)
+	) const
 {
 	LONGLONG key = Create64Key(ONID, TSID, SID);
 	map<LONGLONG, CH_DATA5>::const_iterator itr;

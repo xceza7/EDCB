@@ -7,7 +7,11 @@
 #include "SendTSTCPMain.h"
 #include "../../Common/InstanceManager.h"
 
+#ifdef _WIN32
 #define DLL_EXPORT extern "C" __declspec(dllexport)
+#else
+#define DLL_EXPORT extern "C"
+#endif
 
 CInstanceManager<CSendTSTCPMain> g_instMng;
 
@@ -63,6 +67,24 @@ DWORD WINAPI AddSendAddrDLL(
 	DWORD dwRet = NO_ERR;
 	dwRet = ptr->AddSendAddr(lpcwszIP, dwPort);
 	return dwRet;
+}
+
+//送信先を追加(UDP)
+//戻り値：エラーコード
+DLL_EXPORT
+DWORD WINAPI AddSendAddrUdpDLL(
+	int iID, //[IN] InitializeDLLの戻り値
+	LPCWSTR lpcwszIP,
+	DWORD dwPort,
+	BOOL broadcastFlag,
+	int maxSendSize
+	)
+{
+	std::shared_ptr<CSendTSTCPMain> ptr = g_instMng.find(iID);
+	if( ptr == NULL ){
+		return ERR_NOT_INIT;
+	}
+	return ptr->AddSendAddrUdp(lpcwszIP, dwPort, broadcastFlag, maxSendSize);
 }
 
 //送信先クリア

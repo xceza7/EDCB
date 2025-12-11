@@ -1,0 +1,130 @@
+-- vim:set ft=lua:
+dofile(mg.script_name:gsub('[^\\/]*$','')..'util.lua')
+
+ct=CreateContentBuilder(GZIP_THRESHOLD_BYTE)
+ct:Append(DOCTYPE_HTML4_STRICT..[=[
+<html lang="ja">
+<head>
+]=]..DefaultHeadContents()..[=[
+<title>NVRAM設定 - EDCB</title>
+</head>
+<body>
+<h1>データ放送のNVRAM設定</h1>
+<div id="main">
+  <p>
+    <label>郵便番号(7桁)<br>
+    <input type="text" id="nvram-zip" value=""></label><br>
+    <button type="button" id="nvram-gov">↑↑都道府県庁の郵便番号</button>
+  </p><p>
+    <label>地域<br>
+    <select id="nvram-region">
+      <!-- TVTDataBroadcastingWV2/NVRAMSettingsDialog.cpp より -->
+      <option value="255-0x0" selected>未設定
+]=])
+
+for i,v in ipairs({'東北海道','西北海道','青森県','岩手県','宮城県',
+                   '秋田県','山形県','福島県','茨城県','栃木県',
+                   '群馬県','埼玉県','千葉県','東京都(島部を除く)','神奈川県',
+                   '新潟県','富山県','石川県','福井県','山梨県',
+                   '長野県','岐阜県','静岡県','愛知県','三重県',
+                   '滋賀県','京都府','大阪府','兵庫県','奈良県',
+                   '和歌山県','鳥取県','島根県','岡山県','広島県',
+                   '山口県','徳島県','香川県','愛媛県','高知県',
+                   '福岡県','佐賀県','長崎県','熊本県','大分県',
+                   '宮崎県','鹿児島県(南西諸島を除く)','沖縄県','東京都島部(伊豆・小笠原諸島)','鹿児島県島部(南西諸島の鹿児島県域)'}) do
+  ct:Append('      <option value="'..i..('-0x%03x'):format(GetEwsRegionCode(i))..'">'..i..'.'..v..'\n')
+end
+
+ct:Append([=[
+    </select></label>
+  </p><p>
+    <button type="button" id="nvram-set">設定</button><br>
+    ※設定はブラウザのローカルストレージに保存されます
+  </p><p>
+    <button type="button" id="nvram-del">保存領域を全消去</button>
+  </p>
+  <div id="result"></div>
+</div>
+<div id="footer">
+  <a href="index.html">メニュー</a>
+</div>
+<script type="text/javascript">
+var prefix="nvram_prefix=receiverinfo%2F";
+var zip=document.getElementById("nvram-zip");
+var region=document.getElementById("nvram-region");
+var v=localStorage.getItem(prefix+"zipcode");
+if(v){
+  try{
+    v=atob(v);
+    if(/^[0-9]{7}$/.test(v))zip.value=v;
+  }catch(e){}
+}else{
+  zip.value="]=]..(NVRAM_ZIP:match('^'..('[0-9]'):rep(7)..'$') or '')..[=[";
+}
+v=localStorage.getItem(prefix+"regioncode");
+if(v){
+  try{
+    v=atob(v);
+    v=v.charCodeAt(0)<<8|v.charCodeAt(1);
+    for(var i=0;i<region.options.length;i++){
+      if(parseInt(region.options[i].value.split("-0x")[1],16)===v){
+        region.options[i].selected=true;
+        break;
+      }
+    }
+  }catch(e){}
+}else{
+  region.options[]=]..math.floor(math.max(NVRAM_REGION<=50 and NVRAM_REGION or 0,0))..[=[].selected=true;
+}
+document.getElementById("nvram-gov").onclick=function(){
+  if(region.value&&region.value!=="255-0x0"){
+    zip.value=[
+      //都道府県庁の郵便番号はJ-LISの住所(更新日2020-01-31)を基にした
+      "0850835","0600003","0300861","0200023","9800014",//東北海道～(東北海道は釧路総合振興局)
+      "0100951","9900023","9608065","3100852","3200027",//秋田県～
+      "3710026","3300063","2600855","1600023","2310021",//群馬県～
+      "9500965","9300006","9208203","9100005","4000031",//新潟県～
+      "3800837","5008384","4200853","4600001","5140006",//長野県～
+      "5200044","6028041","5400008","6500011","6308213",//滋賀県～
+      "6408269","6800011","6900887","7000824","7300011",//和歌山県～
+      "7530071","7700941","7600017","7900001","7800850",//山口県～
+      "8120045","8400041","8500058","8620950","8700022",//福岡県～
+      "8800805","8900064","9000021","1000101","8913101"//宮崎県～(東京都島部は大島町役場、鹿児島県島部は西之表市役所)
+    ][parseInt(region.value)-1];
+  }
+};
+document.getElementById("nvram-set").onclick=function(){
+  if(/^[0-9]{7}$/.test(zip.value)){
+    localStorage.setItem(prefix+"zipcode",btoa(zip.value));
+  }else{
+    localStorage.removeItem(prefix+"zipcode");
+  }
+  if(region.value&&region.value!=="255-0x0"){
+    var v=parseInt(region.value);
+    localStorage.setItem(prefix+"prefecture",btoa(String.fromCharCode(v)));
+    v=parseInt(region.value.split("-0x")[1],16);
+    localStorage.setItem(prefix+"regioncode",btoa(String.fromCharCode(v>>8,v&0xff)));
+  }else{
+    localStorage.removeItem(prefix+"prefecture");
+    localStorage.removeItem(prefix+"regioncode");
+  }
+  document.getElementById("result").innerText="設定しました";
+};
+document.getElementById("nvram-del").onclick=function(){
+  var keys=[];
+  for(var i=0;i<localStorage.length;i++){
+    if(/^nvram_/.test(localStorage.key(i))){
+      keys.push(localStorage.key(i));
+    }
+  }
+  for(var i=0;i<keys.length;i++){
+    localStorage.removeItem(keys[i]);
+  }
+  document.getElementById("result").innerText="消去しました";
+};
+</script>
+</body>
+</html>
+]=])
+ct:Finish()
+mg.write(ct:Pop(Response(200,'text/html','utf-8',ct.len,ct.gzip)..'\r\n'))

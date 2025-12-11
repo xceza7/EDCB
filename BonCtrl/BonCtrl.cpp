@@ -91,11 +91,17 @@ BOOL CBonCtrl::OpenBonDriver(
 )
 {
 	CloseBonDriver();
-	if( this->bonUtil.OpenBonDriver(GetModulePath().replace_filename(BON_DLL_FOLDER).c_str(), bonDriverFile,
+	if( this->bonUtil.OpenBonDriver(
+#ifdef EDCB_LIB_ROOT
+	                                EDCB_LIB_ROOT,
+#else
+	                                GetModulePath().replace_filename(BON_DLL_FOLDER).c_str(),
+#endif
+	                                bonDriverFile,
 	                                [=](BYTE* data, DWORD size, DWORD remain) { RecvCallback(data, size, remain, tsBuffMaxCount); },
 	                                [=](float signalLv, int space, int ch) { StatusCallback(signalLv, space, ch); }, traceLevel) ){
 		if( openWait > 0 ){
-			Sleep(openWait);
+			SleepForMsec(openWait);
 		}
 		wstring bonFile = this->bonUtil.GetOpenBonDriverFileName();
 		//解析スレッド起動
@@ -121,23 +127,20 @@ BOOL CBonCtrl::GetOpenBonDriver(
 	wstring* bonDriverFile
 	)
 {
-	BOOL ret = FALSE;
-
+	if( bonDriverFile == NULL ){
+		return this->bonUtil.IsOpen();
+	}
 	wstring strBonDriverFile = this->bonUtil.GetOpenBonDriverFileName();
 	if( strBonDriverFile.empty() == false ){
-		ret = TRUE;
-		if( bonDriverFile != NULL ){
-			*bonDriverFile = strBonDriverFile;
-		}
+		*bonDriverFile = strBonDriverFile;
+		return TRUE;
 	}
 
-	return ret;
+	return FALSE;
 }
 
 BOOL CBonCtrl::SetCh(
-	DWORD space,
-	DWORD ch,
-	WORD serviceID
+	const CH_DATA4& chData
 )
 {
 	if( this->tsOut.IsRec() == TRUE ){
@@ -145,8 +148,8 @@ BOOL CBonCtrl::SetCh(
 	}
 	StopEpgCap();
 
-	if( ProcessSetCh(space, ch, FALSE) ){
-		this->nwCtrlServiceID = serviceID;
+	if( ProcessSetCh(chData.space, chData.ch, chData.originalNetworkID) ){
+		this->nwCtrlServiceID = chData.serviceID;
 		this->tsOut.SetServiceID(this->nwCtrlID, this->nwCtrlAllService ? 0xFFFF : this->nwCtrlServiceID);
 		return TRUE;
 	}
@@ -157,19 +160,19 @@ BOOL CBonCtrl::SetCh(
 BOOL CBonCtrl::ProcessSetCh(
 	DWORD space,
 	DWORD ch,
-	BOOL chScan
+	int onidOrChScan
 	)
 {
 	DWORD spaceNow=0;
 	DWORD chNow=0;
 
 	BOOL ret = FALSE;
-	if( this->bonUtil.GetOpenBonDriverFileName().empty() == false ){
+	if( this->bonUtil.IsOpen() ){
 		ret = TRUE;
 		DWORD elapsed;
 		if( this->bonUtil.GetNowCh(&spaceNow, &chNow) == false || space != spaceNow || ch != chNow || this->tsOut.IsChUnknown(&elapsed) && elapsed > 15000 ){
 			StopBackgroundEpgCap();
-			this->tsOut.SetChChangeEvent(chScan);
+			this->tsOut.SetChChangeEvent((WORD)(onidOrChScan < 0 ? 0xFFFF : onidOrChScan), onidOrChScan < 0);
 			AddDebugLogFormat(L"SetCh space %d, ch %d", space, ch);
 			ret = this->bonUtil.SetCh(space, ch);
 			StartBackgroundEpgCap();
@@ -242,7 +245,7 @@ void CBonCtrl::RecvCallback(BYTE* data, DWORD size, DWORD remain, DWORD tsBuffMa
 	BYTE* outData;
 	DWORD outSize;
 	if( data != NULL && size != 0 && this->packetInit.GetTSData(data, size, &outData, &outSize) ){
-		CBlockLock lock(&this->buffLock);
+		lock_recursive_mutex lock(this->buffLock);
 		while( outSize != 0 ){
 			if( this->tsFreeList.empty() ){
 				//バッファを増やす
@@ -250,7 +253,7 @@ void CBonCtrl::RecvCallback(BYTE* data, DWORD size, DWORD remain, DWORD tsBuffMa
 					for( auto itr = this->tsBuffList.begin(); itr != this->tsBuffList.end(); (itr++)->clear() );
 					this->tsFreeList.splice(this->tsFreeList.end(), this->tsBuffList);
 				}else{
-					this->tsFreeList.push_back(vector<BYTE>());
+					this->tsFreeList.emplace_back();
 					this->tsFreeList.back().reserve(48128);
 				}
 			}
@@ -270,7 +273,7 @@ void CBonCtrl::RecvCallback(BYTE* data, DWORD size, DWORD remain, DWORD tsBuffMa
 
 void CBonCtrl::StatusCallback(float signalLv, int space, int ch)
 {
-	CBlockLock lock(&this->buffLock);
+	lock_recursive_mutex lock(this->buffLock);
 	this->statusSignalLv = signalLv;
 	this->viewSpace = space;
 	this->viewCh = ch;
@@ -284,7 +287,7 @@ void CBonCtrl::AnalyzeThread(CBonCtrl* sys)
 		//バッファからデータ取り出し
 		float signalLv;
 		{
-			CBlockLock lock(&sys->buffLock);
+			lock_recursive_mutex lock(sys->buffLock);
 			if( data.empty() == false ){
 				//返却
 				data.front().clear();
@@ -302,18 +305,6 @@ void CBonCtrl::AnalyzeThread(CBonCtrl* sys)
 			sys->analyzeEvent.WaitOne(1000);
 		}
 	}
-}
-
-//サービス一覧を取得する
-//戻り値：
-// エラーコード
-//引数：
-// serviceList				[OUT]サービス情報のリスト
-DWORD CBonCtrl::GetServiceList(
-	vector<CH_DATA4>* serviceList
-	)
-{
-	return this->chUtil.GetEnumService(serviceList);
 }
 
 DWORD CBonCtrl::CreateServiceCtrl(
@@ -456,7 +447,7 @@ BOOL CBonCtrl::StartChScan()
 
 	StopBackgroundEpgCap();
 
-	if( this->bonUtil.GetOpenBonDriverFileName().empty() == false ){
+	if( this->bonUtil.IsOpen() ){
 		this->chScanChkList.clear();
 		const vector<pair<wstring, vector<wstring>>>& spaceList = this->bonUtil.GetOriginalChList();
 		for( size_t i = 0; i < spaceList.size(); i++ ){
@@ -556,7 +547,7 @@ void CBonCtrl::CheckChScan()
 					this->chScanChkNext = TRUE;
 				}
 			}else{
-				if( GetTickCount() - this->chScanTick > (this->chScanChChgTimeOut + this->chScanServiceChkTimeOut) * 1000 ){
+				if( GetU32Tick() - this->chScanTick > (this->chScanChChgTimeOut + this->chScanServiceChkTimeOut) * 1000 ){
 					//チャンネル切り替え成功したけどサービス一覧とれないので無信号と判断
 					AddDebugLog(L"★AutoScan GetService timeout");
 					this->chScanChkNext = TRUE;
@@ -600,8 +591,8 @@ void CBonCtrl::CheckChScan()
 				return;
 			}
 			this->chScanIndexOrStatus = chkCount;
-			if( this->ProcessSetCh(this->chScanChkList[chkCount].space, this->chScanChkList[chkCount].ch, TRUE) ){
-				this->chScanTick = GetTickCount();
+			if( this->ProcessSetCh(this->chScanChkList[chkCount].space, this->chScanChkList[chkCount].ch, -1) ){
+				this->chScanTick = GetU32Tick();
 				this->chScanChkNext = FALSE;
 			}
 		}
@@ -627,7 +618,7 @@ BOOL CBonCtrl::StartEpgCap(
 
 	StopBackgroundEpgCap();
 
-	if( this->bonUtil.GetOpenBonDriverFileName().empty() == false ){
+	if( this->bonUtil.IsOpen() ){
 		if( chList ){
 			this->epgCapChList.clear();
 			for( size_t i = 0; i < chList->size(); i++ ){
@@ -715,7 +706,7 @@ void CBonCtrl::CheckEpgCap()
 					this->epgCapChkNext = TRUE;
 				}
 			}else{
-				DWORD tick = GetTickCount();
+				DWORD tick = GetU32Tick();
 				if( this->epgCapSetChState == 0 ){
 					//切り替え完了
 					this->epgCapSetChState = 1;
@@ -795,35 +786,27 @@ void CBonCtrl::CheckEpgCap()
 
 		if( this->epgCapChkNext ){
 			//次のチャンネルへ
-			chkCount++;
-			if( this->epgCapChList.size() <= (size_t)chkCount ){
-				//全部チェック終わったので終了
-				this->epgCapIndexOrStatus = ST_COMPLETE;
-				return;
-			}
-			if( this->epgCapChList[chkCount].ONID == 4 && this->epgCapBSBasic && this->epgCapChkBS ||
-			    this->epgCapChList[chkCount].ONID == 6 && this->epgCapCS1Basic && this->epgCapChkCS1 ||
-			    this->epgCapChList[chkCount].ONID == 7 && this->epgCapCS2Basic && this->epgCapChkCS2 ||
-			    this->epgCapChList[chkCount].ONID == 10 && this->epgCapCS3Basic && this->epgCapChkCS3 ){
+			for(;;){
 				chkCount++;
-				while( (size_t)chkCount < this->epgCapChList.size() ){
-					if( this->epgCapChList[chkCount].ONID != this->epgCapChList[chkCount - 1].ONID ){
-						break;
-					}
-					chkCount++;
-				}
 				if( this->epgCapChList.size() <= (size_t)chkCount ){
 					//全部チェック終わったので終了
 					this->epgCapIndexOrStatus = ST_COMPLETE;
 					return;
 				}
+				if( this->epgCapChList[chkCount].ONID == 4 && this->epgCapBSBasic && this->epgCapChkBS ||
+				    this->epgCapChList[chkCount].ONID == 6 && this->epgCapCS1Basic && this->epgCapChkCS1 ||
+				    this->epgCapChList[chkCount].ONID == 7 && this->epgCapCS2Basic && this->epgCapChkCS2 ||
+				    this->epgCapChList[chkCount].ONID == 10 && this->epgCapCS3Basic && this->epgCapChkCS3 ){
+					continue;
+				}
+				break;
 			}
 			this->epgCapIndexOrStatus = chkCount;
 			DWORD space;
 			DWORD ch;
 			if( this->chUtil.GetCh(this->epgCapChList[chkCount].ONID, this->epgCapChList[chkCount].TSID,
 			                       this->epgCapChList[chkCount].SID, space, ch) &&
-			    this->ProcessSetCh(space, ch, FALSE) ){
+			    this->ProcessSetCh(space, ch, this->epgCapChList[chkCount].ONID) ){
 				this->epgCapSetChState = 0;
 				this->epgCapChkNext = FALSE;
 			}
@@ -856,7 +839,7 @@ void CBonCtrl::SaveErrCount(
 // writeSize			[OUT]保存ファイル名
 void CBonCtrl::GetRecWriteSize(
 	DWORD id,
-	__int64* writeSize
+	LONGLONG* writeSize
 	)
 {
 	this->tsOut.GetRecWriteSize(id, writeSize);
@@ -897,8 +880,8 @@ void CBonCtrl::StartBackgroundEpgCap()
 	StopBackgroundEpgCap();
 	if( this->chScanIndexOrStatus < ST_WORKING &&
 	    this->epgCapIndexOrStatus < ST_WORKING ){
-		if( this->bonUtil.GetOpenBonDriverFileName().empty() == false ){
-			this->epgCapTick = GetTickCount();
+		if( this->bonUtil.IsOpen() ){
+			this->epgCapTick = GetU32Tick();
 			this->epgCapBackIndexOrStatus = ST_WORKING;
 		}
 	}
@@ -914,7 +897,7 @@ void CBonCtrl::StopBackgroundEpgCap()
 
 void CBonCtrl::CheckEpgCapBack()
 {
-	DWORD tick = GetTickCount();
+	DWORD tick = GetU32Tick();
 	if( this->epgCapBackIndexOrStatus == ST_WORKING ){
 		//取得待機中
 		if( tick - this->epgCapTick > this->epgCapBackStartWaitSec * 1000 ){
@@ -1021,7 +1004,7 @@ void CBonCtrl::CheckLogo()
 		bool update = true;
 		if( UtilFileExists(path).first ){
 			update = false;
-			std::unique_ptr<FILE, decltype(&fclose)> logoFile(UtilOpenFile(path, UTIL_SECURE_READ), fclose);
+			std::unique_ptr<FILE, fclose_deleter> logoFile(UtilOpenFile(path, UTIL_SECURE_READ));
 			if( logoFile ){
 				//小さいか中身が違っていれば更新
 				for( size_t i = 0; i < result.data.size(); i++ ){
@@ -1035,7 +1018,7 @@ void CBonCtrl::CheckLogo()
 		}
 		if( update ){
 			UtilCreateDirectory(path.parent_path());
-			std::unique_ptr<FILE, decltype(&fclose)> logoFile(UtilOpenFile(path, UTIL_SECURE_WRITE), fclose);
+			std::unique_ptr<FILE, fclose_deleter> logoFile(UtilOpenFile(path, UTIL_SECURE_WRITE));
 			if( logoFile ){
 				fwrite(result.data.data(), 1, result.data.size(), logoFile.get());
 			}
@@ -1065,7 +1048,7 @@ void CBonCtrl::GetViewStatusInfo(
 {
 	this->tsOut.GetErrCount(this->nwCtrlID, drop, scramble);
 
-	CBlockLock lock(&this->buffLock);
+	lock_recursive_mutex lock(this->buffLock);
 	*signalLv = this->statusSignalLv;
 	*space = this->viewSpace;
 	*ch = this->viewCh;

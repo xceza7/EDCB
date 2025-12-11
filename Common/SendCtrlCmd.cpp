@@ -87,7 +87,7 @@ bool CSendCtrlCmd::PipeExists()
 			return true;
 		}
 #else
-		return UtilFileExists(EDCB_INI_ROOT + this->pipeName).first;
+		return UtilFileExists(fs_path(EDCB_INI_ROOT).append(this->pipeName)).first;
 #endif
 	}
 	return false;
@@ -117,7 +117,7 @@ void CSendCtrlCmd::SetConnectTimeOut(
 
 namespace
 {
-DWORD SendPipe(const wstring& pipeName, DWORD timeOut, const CMD_STREAM* cmd, CMD_STREAM* res)
+DWORD SendPipe(const wstring& pipeName, DWORD timeOut, const CCmdStream& cmd, CCmdStream* res)
 {
 #ifdef _WIN32
 	//接続待ち
@@ -147,7 +147,7 @@ DWORD SendPipe(const wstring& pipeName, DWORD timeOut, const CMD_STREAM* cmd, CM
 	auto closeFile = [=]() { return CloseHandle(pipe); };
 #else
 	string sockPath;
-	WtoUTF8(EDCB_INI_ROOT + pipeName, sockPath);
+	WtoUTF8(fs_path(EDCB_INI_ROOT).append(pipeName).native(), sockPath);
 	sockaddr_un addr;
 	if( sockPath.size() >= sizeof(addr.sun_path) ){
 		return CMD_ERR_INVALID_ARG;
@@ -177,58 +177,43 @@ DWORD SendPipe(const wstring& pipeName, DWORD timeOut, const CMD_STREAM* cmd, CM
 #endif
 
 	//送信
-	DWORD head[2];
-	head[0] = cmd->param;
-	head[1] = cmd->dataSize;
 	DWORD n;
 #ifdef _WIN32
-	if( WriteFile(pipe, head, sizeof(head), &n, NULL) == FALSE ){
+	if( WriteFile(pipe, cmd.GetStream(), cmd.GetStreamSize(), &n, NULL) == FALSE ){
 #else
-	if( send(sock, head, sizeof(head), 0) != (int)sizeof(head) ){
+	if( send(sock, cmd.GetStream(), cmd.GetStreamSize(), 0) != (int)cmd.GetStreamSize() ){
 #endif
 		closeFile();
 		return CMD_ERR;
 	}
-	if( cmd->dataSize > 0 ){
-#ifdef _WIN32
-		if( WriteFile(pipe, cmd->data.get(), cmd->dataSize, &n, NULL) == FALSE ){
-#else
-		if( send(sock, cmd->data.get(), cmd->dataSize, 0) != (int)cmd->dataSize ){
-#endif
-			closeFile();
-			return CMD_ERR;
-		}
-	}
 
 	//受信
+	BYTE head[8];
 	n = 0;
 #ifdef _WIN32
-	for( DWORD m; n < sizeof(head) && ReadFile(pipe, (BYTE*)head + n, sizeof(head) - n, &m, NULL); n += m );
+	for( DWORD m; n < sizeof(head) && ReadFile(pipe, head + n, sizeof(head) - n, &m, NULL); n += m );
 #else
-	for( int m; n < sizeof(head) && (m = (int)recv(sock, (BYTE*)head + n, sizeof(head) - n, 0)) > 0; n += m );
+	for( int m; n < sizeof(head) && (m = (int)recv(sock, head + n, sizeof(head) - n, 0)) > 0; n += m );
 #endif
 	if( n != sizeof(head) ){
 		closeFile();
 		return CMD_ERR;
 	}
-	res->param = head[0];
-	res->dataSize = head[1];
-	if( res->dataSize > 0 ){
-		res->data.reset(new BYTE[res->dataSize]);
-		n = 0;
+	res->SetParam(head[0] | head[1] << 8 | head[2] << 16 | (DWORD)head[3] << 24);
+	res->Resize(head[4] | head[5] << 8 | head[6] << 16 | (DWORD)head[7] << 24);
+	n = 0;
 #ifdef _WIN32
-		for( DWORD m; n < res->dataSize && ReadFile(pipe, res->data.get() + n, res->dataSize - n, &m, NULL); n += m );
+	for( DWORD m; n < res->GetDataSize() && ReadFile(pipe, res->GetData() + n, res->GetDataSize() - n, &m, NULL); n += m );
 #else
-		for( int m; n < res->dataSize && (m = (int)recv(sock, res->data.get() + n, res->dataSize - n, 0)) > 0; n += m );
+	for( int m; n < res->GetDataSize() && (m = (int)recv(sock, res->GetData() + n, res->GetDataSize() - n, 0)) > 0; n += m );
 #endif
-		if( n != res->dataSize ){
-			closeFile();
-			return CMD_ERR;
-		}
+	if( n != res->GetDataSize() ){
+		closeFile();
+		return CMD_ERR;
 	}
 	closeFile();
 
-	return res->param;
+	return res->GetParam();
 }
 
 #if !defined(SEND_CTRL_CMD_NO_TCP) && defined(_WIN32)
@@ -248,7 +233,7 @@ int RecvAll(SOCKET sock, char* buf, int len, int flags)
 	return n;
 }
 
-DWORD SendTCP(const wstring& ip, DWORD port, DWORD timeOut, const CMD_STREAM* sendCmd, CMD_STREAM* resCmd)
+DWORD SendTCP(const wstring& ip, DWORD port, DWORD timeOut, const CCmdStream& cmd, CCmdStream* res)
 {
 	string ipA;
 	WtoUTF8(ip, ipA);
@@ -291,46 +276,34 @@ DWORD SendTCP(const wstring& ip, DWORD port, DWORD timeOut, const CMD_STREAM* se
 	}
 
 	//送信
-	DWORD head[256];
-	head[0] = sendCmd->param;
-	head[1] = sendCmd->dataSize;
-	DWORD extSize = 0;
-	if( sendCmd->dataSize > 0 ){
-		extSize = min(sendCmd->dataSize, (DWORD)(sizeof(head) - sizeof(DWORD)*2));
-		memcpy(head + 2, sendCmd->data.get(), extSize);
-	}
-	if( send(sock, (char*)head, sizeof(DWORD)*2 + extSize, 0) != (int)(sizeof(DWORD)*2 + extSize) ||
-	    (sendCmd->dataSize > extSize &&
-	     send(sock, (char*)sendCmd->data.get() + extSize, sendCmd->dataSize - extSize, 0) != (int)(sendCmd->dataSize - extSize)) ){
+	if( send(sock, (const char*)cmd.GetStream(), cmd.GetStreamSize(), 0) != (int)cmd.GetStreamSize() ){
 		closesocket(sock);
 		return CMD_ERR;
 	}
 	//受信
-	if( RecvAll(sock, (char*)head, sizeof(DWORD)*2, 0) != sizeof(DWORD)*2 ){
+	BYTE head[8];
+	if( RecvAll(sock, (char*)head, sizeof(head), 0) != (int)sizeof(head) ){
 		closesocket(sock);
 		return CMD_ERR;
 	}
-	resCmd->param = head[0];
-	resCmd->dataSize = head[1];
-	if( resCmd->dataSize > 0 ){
-		resCmd->data.reset(new BYTE[resCmd->dataSize]);
-		if( RecvAll(sock, (char*)resCmd->data.get(), resCmd->dataSize, 0) != (int)resCmd->dataSize ){
-			closesocket(sock);
-			return CMD_ERR;
-		}
+	res->SetParam(head[0] | head[1] << 8 | head[2] << 16 | (DWORD)head[3] << 24);
+	res->Resize(head[4] | head[5] << 8 | head[6] << 16 | (DWORD)head[7] << 24);
+	if( RecvAll(sock, (char*)res->GetData(), res->GetDataSize(), 0) != (int)res->GetDataSize() ){
+		closesocket(sock);
+		return CMD_ERR;
 	}
 	closesocket(sock);
 
-	return resCmd->param;
+	return res->GetParam();
 }
 
 #endif
 }
 
-DWORD CSendCtrlCmd::SendCmdStream(const CMD_STREAM* cmd, CMD_STREAM* res)
+DWORD CSendCtrlCmd::SendCmdStream(const CCmdStream& cmd, CCmdStream* res)
 {
 	DWORD ret = CMD_ERR;
-	CMD_STREAM tmpRes;
+	CCmdStream tmpRes;
 
 	if( res == NULL ){
 		res = &tmpRes;

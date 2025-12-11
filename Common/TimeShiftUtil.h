@@ -1,7 +1,6 @@
 ﻿#pragma once
-#include "../BonCtrl/SendUDP.h"
-#include "../BonCtrl/SendTCP.h"
-#include "StructDef.h"
+#include "PathUtil.h"
+#include "SendTSTCPDllUtil.h"
 #include "ThreadUtil.h"
 
 class CTimeShiftUtil
@@ -12,11 +11,15 @@ public:
 
 	//UDP/TCP送信を行う
 	//戻り値：
-	// 成功：valに開始ポート番号（終了or失敗：値は不変）
+	// 成功：udpPortとtcpPortに開始ポート番号（終了or失敗：値は不変）
 	//引数：
-	// val		[IN/OUT]送信先情報
+	// ip		[IN]送信先アドレス
+	// udpPort	[OUT]開始UDPポート番号（NULLで送信停止）
+	// tcpPort	[OUT]開始TCPポート番号（NULLで送信停止）
 	void Send(
-		NWPLAY_PLAY_INFO* val
+		LPCWSTR ip,
+		DWORD* udpPort,
+		DWORD* tcpPort
 		);
 
 	//タイムシフト用ファイルを開く
@@ -42,27 +45,24 @@ public:
 	//引数：
 	// filePos		[OUT]ファイル位置
 	// fileSize		[OUT]ファイルサイズ
-	void GetFilePos(__int64* filePos, __int64* fileSize);
+	void GetFilePos(LONGLONG* filePos, LONGLONG* fileSize);
 
 	//送信開始位置を変更する
 	//引数：
 	// filePos		[IN]ファイル位置
-	void SetFilePos(__int64 filePos);
+	void SetFilePos(LONGLONG filePos);
 
 protected:
 	recursive_mutex_ utilLock;
 	recursive_mutex_ ioLock;
-	CSendUDP sendUdp;
-	CSendTCP sendTcp;
+	util_unique_handle udpMutex;
+	util_unique_handle tcpMutex;
+	CSendTSTCPDllUtil sendUdp;
+	CSendTSTCPDllUtil sendTcp;
 	struct SEND_INFO {
 		wstring ip;
 		DWORD port;
 		wstring key;
-#ifdef _WIN32
-		HANDLE mutex;
-#else
-		FILE* mutex;
-#endif
 	} sendInfo[2];
 
 	wstring filePath;
@@ -70,14 +70,14 @@ protected:
 
 	BOOL fileMode;
 	int seekJitter;
-	__int64 currentFilePos;
+	LONGLONG currentFilePos;
 
 	thread_ readThread;
 	atomic_bool_ readStopFlag;
-	std::unique_ptr<FILE, decltype(&fclose)> readFile;
-	std::unique_ptr<FILE, decltype(&fclose)> seekFile;
+	std::unique_ptr<FILE, fclose_deleter> readFile;
+	std::unique_ptr<FILE, fclose_deleter> seekFile;
 protected:
 	static void ReadThread(CTimeShiftUtil* sys);
-	__int64 GetAvailableFileSize() const;
+	LONGLONG GetAvailableFileSize() const;
 };
 

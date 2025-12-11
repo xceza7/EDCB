@@ -240,7 +240,7 @@ namespace EpgTimer.DefineClass
                 addParagraph("ServiceID : " + eventInfo.service_id.ToString() + " (0x" + eventInfo.service_id.ToString("X4") + ")", sctn_ID1, 0);
                 addParagraph("EventID : " + eventInfo.event_id.ToString() + " (0x" + eventInfo.event_id.ToString("X4") + ")", sctn_ID1, 0);
             }
-            if (textMode == EventInfoTextMode.All || textMode == EventInfoTextMode.BasicOnly)
+            if (textMode == EventInfoTextMode.BasicText || textMode == EventInfoTextMode.All) 
             {
                 flowDoc1.Blocks.Add(p_basicInfo1);
             }

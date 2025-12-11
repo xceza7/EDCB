@@ -78,13 +78,9 @@ public:
 	//戻り値：
 	// TRUE（成功）、FALSE（失敗）
 	//引数：
-	// space			[IN]変更チャンネルのSpace
-	// ch				[IN]変更チャンネルの物理Ch
-	// serviceID		[IN]変更チャンネルのサービスID
+	// chData		[IN]変更チャンネルのサービス情報
 	BOOL SetCh(
-		DWORD space,
-		DWORD ch,
-		WORD serviceID
+		const CH_DATA4& chData
 		);
 
 	//チャンネル変更中かどうか
@@ -106,12 +102,11 @@ public:
 
 	//サービス一覧を取得する
 	//戻り値：
-	// エラーコード
-	//引数：
-	// serviceList				[OUT]サービス情報のリスト
-	DWORD GetServiceList(
-		vector<CH_DATA4>* serviceList
-		);
+	// サービス一覧。mapのキーは読み込み順番号。次に非スレッドセーフメソッドを呼び出すまで有効
+	const map<DWORD, CH_DATA4>& GetServiceList(
+		) {
+		return this->chUtil.GetServiceList();
+	}
 
 	//TSストリーム制御用コントロールを作成する
 	//戻り値：
@@ -149,14 +144,14 @@ public:
 
 	//UDPで送信を行う
 	//引数：
-	// sendList		[IN/OUT]送信先リスト。NULLで停止。Portは実際に送信に使用したPortが返る。
+	// sendList		[IN/OUT]送信先リスト。NULLで停止。送信に使用したポート(失敗のものは0x10000)がportにセットされる。
 	void SendUdp(
 		vector<NW_SEND_INFO>* sendList
 		);
 
 	//TCPで送信を行う
 	//引数：
-	// sendList		[IN/OUT]送信先リスト。NULLで停止。Portは実際に送信に使用したPortが返る。
+	// sendList		[IN/OUT]送信先リスト。NULLで停止。送信に使用したポート(失敗のものは0x10000)がportにセットされる。
 	void SendTcp(
 		vector<NW_SEND_INFO>* sendList
 		);
@@ -260,7 +255,7 @@ public:
 	// writeSize			[OUT]保存ファイル名
 	void GetRecWriteSize(
 		DWORD id,
-		__int64* writeSize
+		LONGLONG* writeSize
 		);
 
 	//指定サービスの現在or次のEPG情報を取得する
@@ -468,7 +463,7 @@ protected:
 	BOOL ProcessSetCh(
 		DWORD space,
 		DWORD ch,
-		BOOL chScan
+		int onidOrChScan
 		);
 
 	static void GetEpgDataFilePath(WORD ONID, WORD TSID, wstring& epgDataFilePath);

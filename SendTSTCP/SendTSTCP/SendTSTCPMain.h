@@ -1,10 +1,13 @@
 ﻿#pragma once
 
+#ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#else
+#include <sys/socket.h>
+#endif
 #include <list>
 
-#include "../../Common/StringUtil.h"
 #include "../../Common/ThreadUtil.h"
 
 class CSendTSTCPMain
@@ -18,6 +21,15 @@ public:
 	DWORD AddSendAddr(
 		LPCWSTR lpcwszIP,
 		DWORD dwPort
+		);
+
+	//送信先を追加(UDP)
+	//戻り値：エラーコード
+	DWORD AddSendAddrUdp(
+		LPCWSTR lpcwszIP,
+		DWORD dwPort,
+		BOOL broadcastFlag,
+		int maxSendSize
 		);
 
 	//送信先クリア
@@ -51,19 +63,33 @@ public:
 protected:
 	CAutoResetEvent m_stopSendEvent;
 	thread_ m_sendThread;
-
 	recursive_mutex_ m_sendLock;
-
+#ifdef _WIN32
+	int m_wsaStartupResult;
+#endif
 	std::list<vector<BYTE>> m_TSBuff;
+	bool m_bSendingToSomeone;
 
 	struct SEND_INFO {
-		string strIP;
-		DWORD dwPort;
+		string strIP; //空のときUDP
+		struct sockaddr_storage udpAddr;
+		size_t udpAddrlen;
+		int udpMaxSendSize;
+		WORD port;
+		bool bSuppressHeader;
 		SOCKET sock;
-		HANDLE pipe;
-		HANDLE olEvent;
-		OVERLAPPED ol;
-		BOOL bConnect;
+#ifdef _WIN32
+		HANDLE pipe[2];
+		HANDLE olEvent[2];
+		OVERLAPPED ol[2];
+		bool bPipeWriting[2];
+#else
+		int pipe[2];
+		string strPipe[2];
+		DWORD wroteBytes[2];
+#endif
+		bool bConnect[2];
+		DWORD writeAheadCount[2];
 	};
 	std::list<SEND_INFO> m_SendList;
 

@@ -15,10 +15,17 @@ CEpgTimerSrvSetting::SETTING CEpgTimerSrvSetting::LoadSetting(LPCWSTR iniPath)
 {
 	SETTING s;
 	s.epgArchivePeriodHour = GetPrivateProfileInt(L"SET", L"EpgArchivePeriodHour", 0, iniPath);
+#ifdef _WIN32
 	s.residentMode = GetPrivateProfileInt(L"SET", L"ResidentMode", 2, iniPath);
 	s.notifyTipStyle = GetPrivateProfileInt(L"SET", L"NotifyTipStyle", 0, iniPath);
 	s.blinkPreRec = GetPrivateProfileInt(L"SET", L"BlinkPreRec", 0, iniPath) != 0;
 	s.noBalloonTip = GetPrivateProfileInt(L"SET", L"NoBalloonTip", 0, iniPath);
+#else
+	s.residentMode = 1;
+	s.notifyTipStyle = 0;
+	s.blinkPreRec = false;
+	s.noBalloonTip = 0;
+#endif
 	s.saveNotifyLog = GetPrivateProfileInt(L"SET", L"SaveNotifyLog", 0, iniPath) != 0;
 	s.saveDebugLog = GetPrivateProfileInt(L"SET", L"SaveDebugLog", 0, iniPath) != 0;
 	s.wakeTime = GetPrivateProfileInt(L"SET", L"WakeTime", 5, iniPath);
@@ -27,13 +34,15 @@ CEpgTimerSrvSetting::SETTING CEpgTimerSrvSetting::LoadSetting(LPCWSTR iniPath)
 	s.chkGroupEvent = GetPrivateProfileInt(L"SET", L"ChkGroupEvent", 1, iniPath) != 0;
 	s.recEndMode = (BYTE)GetPrivateProfileInt(L"SET", L"RecEndMode", 2, iniPath);
 	s.reboot = GetPrivateProfileInt(L"SET", L"Reboot", 0, iniPath) != 0;
+	s.noFileStreaming = GetPrivateProfileInt(L"NO_SUSPEND", L"NoFileStreaming", 0, iniPath) != 0;
+	s.noStandbyTime = GetPrivateProfileInt(L"NO_SUSPEND", L"NoStandbyTime", 10, iniPath);
+	int count;
+#ifdef WIN32
 	s.noUsePC = GetPrivateProfileInt(L"NO_SUSPEND", L"NoUsePC", 0, iniPath) != 0;
 	s.noUsePCTime = GetPrivateProfileInt(L"NO_SUSPEND", L"NoUsePCTime", 3, iniPath);
-	s.noFileStreaming = GetPrivateProfileInt(L"NO_SUSPEND", L"NoFileStreaming", 0, iniPath) != 0;
 	s.noShareFile = GetPrivateProfileInt(L"NO_SUSPEND", L"NoShareFile", 0, iniPath) != 0;
-	s.noStandbyTime = GetPrivateProfileInt(L"NO_SUSPEND", L"NoStandbyTime", 10, iniPath);
 	s.noSuspendExeList.clear();
-	int count = GetPrivateProfileInt(L"NO_SUSPEND", L"Count", INT_MAX, iniPath);
+	count = GetPrivateProfileInt(L"NO_SUSPEND", L"Count", INT_MAX, iniPath);
 	if( count == INT_MAX ){
 		//未設定
 		s.noSuspendExeList.push_back(L"EpgDataCap_Bon");
@@ -47,6 +56,7 @@ CEpgTimerSrvSetting::SETTING CEpgTimerSrvSetting::LoadSetting(LPCWSTR iniPath)
 			}
 		}
 	}
+#endif
 	s.viewBonList.clear();
 	count = GetPrivateProfileInt(L"TVTEST", L"Num", 0, iniPath);
 	for( int i = 0; i < count; i++ ){
@@ -82,7 +92,7 @@ CEpgTimerSrvSetting::SETTING CEpgTimerSrvSetting::LoadSetting(LPCWSTR iniPath)
 					//曜日指定接尾辞(w1=Mon,...,w7=Sun)
 					wday = (int)(wcstoul(endp + 1, NULL, 10) % 8);
 				}
-				s.epgCapTimeList.resize(s.epgCapTimeList.size() + 1);
+				s.epgCapTimeList.emplace_back();
 				s.epgCapTimeList.back().second.first = (wday * 24 + hour) * 60 + minute;
 				//有効か
 				swprintf_s(key, L"%dSelect", i);
@@ -137,10 +147,17 @@ CEpgTimerSrvSetting::SETTING CEpgTimerSrvSetting::LoadSetting(LPCWSTR iniPath)
 	s.delReserveMode = GetPrivateProfileInt(L"SET", L"DelReserveMode", 2, iniPath);
 	s.recAppWakeTime = GetPrivateProfileInt(L"SET", L"RecAppWakeTime", 2, iniPath);
 	s.recMinWake = GetPrivateProfileInt(L"SET", L"RecMinWake", 1, iniPath) != 0;
-	s.recView = GetPrivateProfileInt(L"SET", L"RecView", 1, iniPath) != 0;
+	int recView = GetPrivateProfileInt(L"SET", L"RecView", 1, iniPath);
+	s.openViewForViewing = (recView & 1) != 0;
+	s.openViewForRec = (recView & 2) != 0;
+	s.openViewAlways = (recView & 4) != 0;
 	s.recNW = GetPrivateProfileInt(L"SET", L"RecNW", 0, iniPath) != 0;
 	s.pgInfoLog = GetPrivateProfileInt(L"SET", L"PgInfoLog", 1, iniPath) != 0;
+#ifdef _WIN32
 	s.pgInfoLogAsUtf8 = GetPrivateProfileInt(L"SET", L"PgInfoLogAsUtf8", 0, iniPath) != 0;
+#else
+	s.pgInfoLogAsUtf8 = true;
+#endif
 	s.dropLog = GetPrivateProfileInt(L"SET", L"DropLog", 1, iniPath) != 0;
 	s.recOverWrite = GetPrivateProfileInt(L"SET", L"RecOverWrite", 0, iniPath) != 0;
 	s.processPriority = GetPrivateProfileInt(L"SET", L"ProcessPriority", 3, iniPath);
@@ -169,14 +186,10 @@ vector<pair<wstring, wstring>> CEpgTimerSrvSetting::EnumBonFileName(LPCWSTR sett
 				bon.pop_back();
 			}
 			if( bon.empty() == false ){
-#ifdef _WIN32
-				bon += L".dll";
-#else
-				bon += L".so";
-#endif
+				bon += EDCB_LIB_EXT;
 				if( std::find_if(ret.begin(), ret.end(), [&](const pair<wstring, wstring>& a) {
 				        return UtilComparePath(a.first.c_str(), bon.c_str()) == 0; }) == ret.end() ){
-					ret.push_back(std::make_pair(std::move(bon), std::move(findData.fileName)));
+					ret.emplace_back(std::move(bon), std::move(findData.fileName));
 				}
 			}
 		}
@@ -200,7 +213,13 @@ wstring CEpgTimerSrvSetting::CheckTSExtension(const wstring& ext)
 vector<wstring> CEpgTimerSrvSetting::EnumRecNamePlugInFileName()
 {
 	vector<wstring> ret;
-	EnumFindFile(GetModulePath().replace_filename(L"RecName").append(L"RecName*.dll"), [&ret](UTIL_FIND_DATA& findData) -> bool {
+	EnumFindFile(
+#ifdef EDCB_LIB_ROOT
+		fs_path(EDCB_LIB_ROOT)
+#else
+		GetModulePath().replace_filename(L"RecName")
+#endif
+		.append(L"RecName*" EDCB_LIB_EXT), [&ret](UTIL_FIND_DATA& findData) -> bool {
 		if( findData.isDir == false ){
 			ret.push_back(std::move(findData.fileName));
 		}
@@ -356,6 +375,9 @@ INT_PTR CEpgTimerSrvSetting::OnInitDialog()
 	SetDlgItemText(hwnd, IDC_EDIT_SET_REC_CMD_BON, GetPrivateProfileToString(L"APP_CMD_OPT", L"Bon", L"-d", viewAppIniPath.c_str()).c_str());
 	SetDlgItemText(hwnd, IDC_EDIT_SET_REC_CMD_MIN, GetPrivateProfileToString(L"APP_CMD_OPT", L"Min", L"-min", viewAppIniPath.c_str()).c_str());
 	SetDlgItemText(hwnd, IDC_EDIT_SET_REC_CMD_VIEW_OFF, GetPrivateProfileToString(L"APP_CMD_OPT", L"ViewOff", L"-noview", viewAppIniPath.c_str()).c_str());
+	SetDlgItemText(hwnd, IDC_EDIT_SET_REC_CMD_ONID, GetPrivateProfileToString(L"APP_CMD_OPT", L"ONID", L"-nid", viewAppIniPath.c_str()).c_str());
+	SetDlgItemText(hwnd, IDC_EDIT_SET_REC_CMD_TSID, GetPrivateProfileToString(L"APP_CMD_OPT", L"TSID", L"-tsid", viewAppIniPath.c_str()).c_str());
+	SetDlgItemText(hwnd, IDC_EDIT_SET_REC_CMD_SID, GetPrivateProfileToString(L"APP_CMD_OPT", L"SID", L"-sid", viewAppIniPath.c_str()).c_str());
 	for( int i = 0; ; i++ ){
 		fs_path recPath = GetRecFolderPath(i);
 		if( recPath.empty() ){
@@ -398,6 +420,13 @@ INT_PTR CEpgTimerSrvSetting::OnInitDialog()
 		ListBox_AddString(GetDlgItem(hwnd, IDC_LIST_SET_BON), bonFileNameList[i].first.c_str());
 		ListBox_SetItemData(GetDlgItem(hwnd, IDC_LIST_SET_BON), i, MAKEWORD(count, epgCount));
 		ListBox_SetCurSel(GetDlgItem(hwnd, IDC_LIST_SET_BON), 0);
+	}
+
+	WCHAR versionText[128] = L"Ver.";
+	LoadString(GetModuleHandle(NULL), IDS_VERSION_TEXT, versionText + 4, (int)array_size(versionText) - 4);
+	if( wcslen(versionText) > 4 ){
+		//バージョン文字列を表示
+		SetDlgItemText(hwnd, IDC_STATIC_VERSION_TEXT, versionText);
 	}
 
 	//EPG取得
@@ -490,7 +519,9 @@ INT_PTR CEpgTimerSrvSetting::OnInitDialog()
 	}
 	ComboBox_SetCurSel(GetDlgItem(hwnd, IDC_COMBO_SET_PROCESS_PRIORITY), min(max(setting.processPriority, 0), 5));
 	SetDlgButtonCheck(hwnd, IDC_CHECK_SET_REC_MIN_WAKE, setting.recMinWake);
-	SetDlgButtonCheck(hwnd, IDC_CHECK_SET_REC_VIEW, setting.recView);
+	SetDlgButtonCheck(hwnd, IDC_CHECK_SET_OPEN_VIEW_FOR_VIEWING, setting.openViewForViewing);
+	SetDlgButtonCheck(hwnd, IDC_CHECK_SET_OPEN_VIEW_FOR_REC, setting.openViewForRec);
+	SetDlgButtonCheck(hwnd, IDC_CHECK_SET_OPEN_VIEW_ALWAYS, setting.openViewAlways);
 	SetDlgButtonCheck(hwnd, IDC_CHECK_SET_DROP_LOG, setting.dropLog);
 	SetDlgButtonCheck(hwnd, IDC_CHECK_SET_PG_INFO_LOG, setting.pgInfoLog);
 	SetDlgButtonCheck(hwnd, IDC_CHECK_SET_PG_INFO_LOG_AS_UTF8, setting.pgInfoLogAsUtf8);
@@ -549,6 +580,8 @@ INT_PTR CEpgTimerSrvSetting::OnInitDialog()
 	SetDlgItemInt(hwnd, IDC_EDIT_SET_TCP_RES_TO, GetPrivateProfileInt(L"SET", L"TCPResponseTimeoutSec", 120, iniPath.c_str()), FALSE);
 	SetDlgButtonCheck(hwnd, IDC_CHECK_SET_AUTODEL_REC_INFO, setting.autoDelRecInfo);
 	SetDlgItemInt(hwnd, IDC_EDIT_SET_AUTODEL_REC_INFO, setting.autoDelRecInfoNum, FALSE);
+	SetDlgItemInt(hwnd, IDC_EDIT_SET_REC_INFO2_MAX, setting.recInfo2Max, FALSE);
+	SetDlgItemInt(hwnd, IDC_EDIT_SET_REC_INFO2_DROP_CHK, setting.recInfo2DropChk, FALSE);
 	for( int i = 0; i <= 14; i++ ){
 		WCHAR val[16];
 		swprintf_s(val, L"%d", i);
@@ -579,6 +612,7 @@ INT_PTR CEpgTimerSrvSetting::OnInitDialog()
 	//連動処理のため
 	SendMessage(this->hwndBasic, WM_COMMAND, MAKELONG(IDC_LIST_SET_BON, LBN_SELCHANGE), 0);
 	SendMessage(this->hwndRec, WM_COMMAND, IDC_CHECK_SET_NO_USE_PC, 0);
+	SendMessage(this->hwndRec, WM_COMMAND, IDC_CHECK_SET_OPEN_VIEW_ALWAYS, 0);
 	SendMessage(this->hwndRec, WM_COMMAND, IDC_CHECK_SET_PG_INFO_LOG, 0);
 	SendMessage(this->hwndReserve, WM_COMMAND, IDC_CHECK_SET_REC_INFO_DEL_FILE, 0);
 	SendMessage(this->hwndReserve, WM_COMMAND, IDC_CHECK_SET_AUTODEL, 0);
@@ -651,6 +685,19 @@ void CEpgTimerSrvSetting::OnBnClickedOk()
 	if( wcscmp(buff.data(), GetPrivateProfileToString(L"APP_CMD_OPT", L"ViewOff", L"-noview", viewAppIniPath.c_str()).c_str()) != 0 ){
 		WritePrivateProfileString(L"APP_CMD_OPT", L"ViewOff", buff.data(), viewAppIniPath.c_str());
 	}
+	GetWindowTextBuffer(GetDlgItem(hwnd, IDC_EDIT_SET_REC_CMD_ONID), buff);
+	if( wcscmp(buff.data(), GetPrivateProfileToString(L"APP_CMD_OPT", L"ONID", L"-nid", viewAppIniPath.c_str()).c_str()) != 0 ){
+		WritePrivateProfileString(L"APP_CMD_OPT", L"ONID", buff.data(), viewAppIniPath.c_str());
+	}
+	GetWindowTextBuffer(GetDlgItem(hwnd, IDC_EDIT_SET_REC_CMD_TSID), buff);
+	if( wcscmp(buff.data(), GetPrivateProfileToString(L"APP_CMD_OPT", L"TSID", L"-tsid", viewAppIniPath.c_str()).c_str()) != 0 ){
+		WritePrivateProfileString(L"APP_CMD_OPT", L"TSID", buff.data(), viewAppIniPath.c_str());
+	}
+	GetWindowTextBuffer(GetDlgItem(hwnd, IDC_EDIT_SET_REC_CMD_SID), buff);
+	if( wcscmp(buff.data(), GetPrivateProfileToString(L"APP_CMD_OPT", L"SID", L"-sid", viewAppIniPath.c_str()).c_str()) != 0 ){
+		WritePrivateProfileString(L"APP_CMD_OPT", L"SID", buff.data(), viewAppIniPath.c_str());
+	}
+
 	int num = 0;
 	for( int i = 0; i < ListBox_GetCount(GetDlgItem(hwnd, IDC_LIST_SET_REC_FOLDER)); i++ ){
 		GetListBoxTextBuffer(GetDlgItem(hwnd, IDC_LIST_SET_REC_FOLDER), i, buff);
@@ -701,8 +748,8 @@ void CEpgTimerSrvSetting::OnBnClickedOk()
 	for( int i = 0; i < ListView_GetItemCount(GetDlgItem(hwnd, IDC_LIST_SET_EPG_TIME)); i++ ){
 		WCHAR w[32] = {};
 		WCHAR f[32] = {};
-		ListView_GetItemText(GetDlgItem(hwnd, IDC_LIST_SET_EPG_TIME), i, 0, w, array_size(w));
-		ListView_GetItemText(GetDlgItem(hwnd, IDC_LIST_SET_EPG_TIME), i, 1, f, array_size(f));
+		ListView_GetItemText(GetDlgItem(hwnd, IDC_LIST_SET_EPG_TIME), i, 0, w, (int)array_size(w));
+		ListView_GetItemText(GetDlgItem(hwnd, IDC_LIST_SET_EPG_TIME), i, 1, f, (int)array_size(f));
 		if( wcslen(w) == 6 && wcslen(f) == 7 ){
 			swprintf_s(key, L"%d", num);
 			WCHAR val[32];
@@ -768,7 +815,9 @@ void CEpgTimerSrvSetting::OnBnClickedOk()
 	WritePrivateProfileInt(L"SET", L"RecAppWakeTime", GetDlgItemInt(hwnd, IDC_EDIT_SET_APP_WAKE_TIME, NULL, FALSE), iniPath.c_str());
 	WritePrivateProfileInt(L"SET", L"ProcessPriority", ComboBox_GetCurSel(GetDlgItem(hwnd, IDC_COMBO_SET_PROCESS_PRIORITY)), iniPath.c_str());
 	WritePrivateProfileInt(L"SET", L"RecMinWake", GetDlgButtonCheck(hwnd, IDC_CHECK_SET_REC_MIN_WAKE), iniPath.c_str());
-	WritePrivateProfileInt(L"SET", L"RecView", GetDlgButtonCheck(hwnd, IDC_CHECK_SET_REC_VIEW), iniPath.c_str());
+	WritePrivateProfileInt(L"SET", L"RecView", GetDlgButtonCheck(hwnd, IDC_CHECK_SET_OPEN_VIEW_FOR_VIEWING) +
+	                                           GetDlgButtonCheck(hwnd, IDC_CHECK_SET_OPEN_VIEW_FOR_REC) * 2 +
+	                                           GetDlgButtonCheck(hwnd, IDC_CHECK_SET_OPEN_VIEW_ALWAYS) * 4, iniPath.c_str());
 	WritePrivateProfileInt(L"SET", L"DropLog", GetDlgButtonCheck(hwnd, IDC_CHECK_SET_DROP_LOG), iniPath.c_str());
 	WritePrivateProfileInt(L"SET", L"PgInfoLog", GetDlgButtonCheck(hwnd, IDC_CHECK_SET_PG_INFO_LOG), iniPath.c_str());
 	WritePrivateProfileInt(L"SET", L"PgInfoLogAsUtf8", GetDlgButtonCheck(hwnd, IDC_CHECK_SET_PG_INFO_LOG_AS_UTF8), iniPath.c_str());
@@ -838,6 +887,8 @@ void CEpgTimerSrvSetting::OnBnClickedOk()
 	WritePrivateProfileInt(L"SET", L"TCPResponseTimeoutSec", GetDlgItemInt(hwnd, IDC_EDIT_SET_TCP_RES_TO, NULL, FALSE), iniPath.c_str());
 	WritePrivateProfileInt(L"SET", L"AutoDelRecInfo", GetDlgButtonCheck(hwnd, IDC_CHECK_SET_AUTODEL_REC_INFO), iniPath.c_str());
 	WritePrivateProfileInt(L"SET", L"AutoDelRecInfoNum", GetDlgItemInt(hwnd, IDC_EDIT_SET_AUTODEL_REC_INFO, NULL, FALSE), iniPath.c_str());
+	WritePrivateProfileInt(L"SET", L"RecInfo2Max", GetDlgItemInt(hwnd, IDC_EDIT_SET_REC_INFO2_MAX, NULL, FALSE), iniPath.c_str());
+	WritePrivateProfileInt(L"SET", L"RecInfo2DropChk", GetDlgItemInt(hwnd, IDC_EDIT_SET_REC_INFO2_DROP_CHK, NULL, FALSE), iniPath.c_str());
 	//無制限は20000日(480000時間、整数秒で表せる大きな値)で表現する
 	int periodDay = ComboBox_GetCurSel(GetDlgItem(hwnd, IDC_COMBO_SET_EPG_ARCHIVE_PERIOD));
 	WritePrivateProfileInt(L"SET", L"EpgArchivePeriodHour", (periodDay > 14 ? 20000 : periodDay) * 24, iniPath.c_str());
@@ -885,7 +936,7 @@ void CEpgTimerSrvSetting::OnBnClickedSetRecNamePlugIn()
 	vector<WCHAR> name;
 	GetWindowTextBuffer(GetDlgItem(this->hwndReserve, IDC_COMBO_SET_RECNAME_PLUGIN), name);
 	if( name[0] ){
-		CReNamePlugInUtil::ShowSetting(GetModulePath().replace_filename(L"RecName").append(name.data()).c_str(), this->hwndTop);
+		CReNamePlugInUtil::ShowSetting(GetModulePath().replace_filename(L"RecName").append(name.data()).native(), this->hwndTop);
 	}
 }
 
@@ -937,7 +988,7 @@ void CEpgTimerSrvSetting::AddEpgTime(bool check)
 		lvi.iItem = ListView_GetItemCount(GetDlgItem(this->hwndEpg, IDC_LIST_SET_EPG_TIME));
 		for( int i = 0; i < lvi.iItem; i++ ){
 			WCHAR buff[32] = {};
-			ListView_GetItemText(GetDlgItem(this->hwndEpg, IDC_LIST_SET_EPG_TIME), i, 0, buff, array_size(buff));
+			ListView_GetItemText(GetDlgItem(this->hwndEpg, IDC_LIST_SET_EPG_TIME), i, 0, buff, (int)array_size(buff));
 			if( wcscmp(buff, weekMin) == 0 ){
 				//すでにある
 				return;
@@ -989,7 +1040,7 @@ void CEpgTimerSrvSetting::BrowseExeFile(HWND hTarget)
 	ofn.hwndOwner = this->hwndTop;
 	ofn.lpstrFilter = L"exe files (*.exe)\0*.exe\0All files (*.*)\0*.*\0";
 	ofn.lpstrFile = buff;
-	ofn.nMaxFile = array_size(buff);
+	ofn.nMaxFile = (DWORD)array_size(buff);
 	ofn.Flags = OFN_FILEMUSTEXIST;
 	if( GetOpenFileName(&ofn) ){
 		SetWindowText(hTarget, buff);
@@ -1090,7 +1141,16 @@ INT_PTR CALLBACK CEpgTimerSrvSetting::ChildDlgProc(HWND hDlg, UINT uMsg, WPARAM 
 		return TRUE;
 	case WM_CTLCOLORDLG:
 	case WM_CTLCOLORSTATIC:
-		return (INT_PTR)GetStockBrush(WHITE_BRUSH);
+		{
+			//ダイアログが灰色背景のときタブコントロールは白背景の可能性が高いので合わせる
+			//ハイコントラスト等で破綻しないよう条件を絞る
+			DWORD c = GetSysColor(COLOR_BTNFACE);
+			DWORD v = ((c & 0xFF) + (c >> 8 & 0xFF) + (c >> 16 & 0xFF)) / 3;
+			if( 0xE0 <= v && v < 0xFF ){
+				return (INT_PTR)GetStockBrush(WHITE_BRUSH);
+			}
+		}
+		break;
 	case WM_NOTIFY:
 		if( ((NMHDR*)lParam)->idFrom == IDC_LIST_SET_EPG_SERVICE && ((NMHDR*)lParam)->code == LVN_ITEMCHANGED ){
 			sys->OnLbnSelchangeListSetEpgService();
@@ -1163,6 +1223,10 @@ INT_PTR CALLBACK CEpgTimerSrvSetting::ChildDlgProc(HWND hDlg, UINT uMsg, WPARAM 
 			break;
 		case IDC_CHECK_SET_NO_USE_PC:
 			EnableWindow(GetDlgItem(hDlg, IDC_EDIT_SET_NO_USE_PC), GetDlgButtonCheck(hDlg, LOWORD(wParam)));
+			break;
+		case IDC_CHECK_SET_OPEN_VIEW_ALWAYS:
+			EnableWindow(GetDlgItem(hDlg, IDC_CHECK_SET_OPEN_VIEW_FOR_VIEWING), GetDlgButtonCheck(hDlg, LOWORD(wParam)) == false);
+			EnableWindow(GetDlgItem(hDlg, IDC_CHECK_SET_OPEN_VIEW_FOR_REC), GetDlgButtonCheck(hDlg, LOWORD(wParam)) == false);
 			break;
 		case IDC_CHECK_SET_PG_INFO_LOG:
 			EnableWindow(GetDlgItem(hDlg, IDC_CHECK_SET_PG_INFO_LOG_AS_UTF8), GetDlgButtonCheck(hDlg, LOWORD(wParam)));

@@ -75,13 +75,17 @@
                 </StackPanel>
                 <CheckBox Margin="0,6,12,0" Content="引数つきで起動したとき(iEPG予約追加など)はすぐに終了する" IsChecked="{Binding ExitAfterProcessingArgs}" />
                 <CheckBox Margin="0,6,0,0" Content="起動時に前回接続サーバーに接続する" Name="checkBox_wakeReconnect" IsEnabled="False" IsChecked="{Binding WakeReconnectNW}" />
+                <StackPanel Margin="0,0,12,0">
+                    <CheckBox Margin="0,6,0,0" Content="起動時/接続時にTSIDの変更を確認する" Name="checkBox_wakeCheckService" IsChecked="{Binding WakeCheckService}" ToolTip="未チェックでも設定画面を開いたときは確認が行われます"/>
+                    <CheckBox Margin="18,4,0,0" Content="変更検出時に確認ダイアログを表示する" Name="checkBox_wakeCheckServiceSilent" IsChecked="{Binding WakeCheckServiceDialog}" IsEnabled="{Binding WakeCheckService}" ToolTip="ダイアログによる起動時の一時停止を抑制できますが、電波状況などには注意してください。"/>
+                </StackPanel>
                 <StackPanel Orientation="Horizontal" Margin="0,6,12,0" Name="stackPanel_WoLWait" IsEnabled="False">
-                    <CheckBox Content="接続失敗時にWoLで再接続を試みる" Margin="0,6,0,0" IsChecked="{Binding WoLWaitRecconect}" ToolTip="WoL→接続(→待機→再接続)&#10;最初にマジックパケットを投げてから接続処理を行います。&#10;接続失敗時はEpgTimerNWが一時的に反応しにくくなっているので注意が必要です" />
+                    <CheckBox Content="接続失敗時にWoLで再接続を試みる" Margin="0,6,0,0" IsChecked="{Binding WoLWaitRecconect}" ToolTip="WoL→接続(→待機→再接続)&#10;最初にマジックパケットを投げてから接続処理を行います。&#10;接続失敗時はEpgTimerNWが一時的に反応しにくくなっているので注意が必要です。" />
                     <TextBox Margin="6,0,0,0" Width="62" Text="{Binding WoLWaitSecond, Converter={StaticResource vcheck},ConverterParameter='3600,1'}"/>
                     <Label Content="秒後" />
                 </StackPanel>
                 <CheckBox Content="休止／スタンバイ移行時にEpgTimerNWを終了する" Margin="0,6,0,0" Name="checkBox_suspendClose" IsEnabled="False" IsChecked="{Binding SuspendCloseNW}" />
-                <CheckBox Content="EPGデータを常に更新する" Margin="0,6,0,0" IsChecked="{Binding NgAutoEpgLoadNW, Converter={StaticResource invert}}" Name="checkBox_ngAutoEpgLoad" ToolTip="未チェックでも、番組表を表示するときは更新されます。&#10;また「EPG再読み込み」で更新できます。"/>
+                <CheckBox Content="EPGデータを常に更新する" Margin="0,6,0,0" IsChecked="{Binding NgAutoEpgLoadNW, Converter={StaticResource invert}}" ToolTip="未チェックでも、番組表を表示するときは更新されます。&#10;また「EPG再読み込み」で更新できます。"/>
                 <StackPanel Margin="0,0,12,0">
                     <CheckBox Content="EPGデータ更新時にすぐ番組表を構築する" Margin="0,6,0,0" IsChecked="{Binding PrebuildEpg}" ToolTip="チェック時は、番組表タブが非表示の場合にも、すぐ番組表を構築します。&#10;番組表タブへの切替えが早くなりますが、EPG更新時などは重くなります。" />
                     <CheckBox Content="全番組表を構築する　※更新時や設定変更時に大変重くなります" Margin="18,4,0,0" IsChecked="{Binding PrebuildEpgAll}" IsEnabled="{Binding PrebuildEpg}" />
@@ -93,6 +97,7 @@
                         <CheckBox Content="キーワード予約検索情報" IsChecked="{Binding NoEpgAutoAddAppend}" ToolTip="チェック時は、キーワード予約の連動更新機能を始め、&#10;キーワード予約関連の機能に多くの支障が発生します。" />
                     </WrapPanel>
                 </StackPanel>
+                <CheckBox Content="サービスのロゴ画像があれば表示する" Margin="0,6,0,0" IsChecked="{Binding ShowLogo}" />
                 <StackPanel Orientation="Horizontal" Margin="0,6,12,0" >
                     <StackPanel>
                         <CheckBox Content="EpgTimerSrvとの接続維持を試みる" Name="checkBox_keepTCPConnect" IsEnabled="False" IsChecked="{Binding ChkSrvRegistTCP}" ToolTip="EpgTimerNW使用時、EpgTimerSrv側の再起動時などに接続維持を試みます" />
@@ -193,14 +198,21 @@
                         <CheckBox Content="最小化で起動する" Name="checkBox_appMin" />
                         <CheckBox Content="UDP、TCP送信を行う" Name="checkBox_appNW" Grid.Column="2" />
                         <CheckBox Content="ドロップログを出力する" Name="checkBox_appDrop" Grid.Column="4" />
-                        <CheckBox Content="視聴時はViewを起動する" Name="checkBox_appView" Grid.Row="2" />
+                        <CheckBox Content="同一ファイル名が存在した場合に上書きする" Name="checkBox_appOverWrite" Grid.Row="2" />
                         <CheckBox Content="録画ファイルの容量確保を行う" Name="checkBox_appKeepDisk" Grid.Row="2" Grid.Column="2" />
                         <StackPanel Orientation="Horizontal" Grid.Row="2" Grid.Column="4" >
                             <CheckBox Content="番組情報を出力する　(" Name="checkBox_addPgInfo" />
                             <CheckBox Content="UTF-8で出力　)" Name="checkBox_PgInfoLogAsUtf8" Margin="12,0,0,0" IsEnabled="{Binding Path=IsChecked, ElementName=checkBox_addPgInfo}" />
                         </StackPanel>
                     </Grid>
-                    <CheckBox Margin="16,0,0,4" Content="同一ファイル名が存在した場合に上書きする" Name="checkBox_appOverWrite" />
+                    <StackPanel Orientation="Horizontal" Margin="16,-4,0,4" >
+                        <Label Content="Viewを起動する" />
+                        <StackPanel Orientation="Horizontal" IsEnabled="{Binding IsChecked, ElementName=checkBox_appOpenAlways, Converter={StaticResource invert}}">
+                            <CheckBox Margin="12,0,0,0" Content="視聴時" Name="checkBox_appOpenViewing" />
+                            <CheckBox Margin="12,0,0,0" Content="録画時" Name="checkBox_appOpenRec" />
+                        </StackPanel>
+                        <CheckBox Margin="12,0,0,0" Content="EPG取得を除く起動時" Name="checkBox_appOpenAlways" />
+                    </StackPanel>
                     <StackPanel Orientation="Horizontal" Margin="16,-4,0,4" >
                         <CheckBox Content="録画用アプリ起動時に録画先フォルダへのアクセスを発生させる[試験的]" IsChecked="{Binding WakeUpHdd}" ToolTip="EpgTimerが実行中であれば、録画するHDDのスリープ解除を試みます。&#10;EpgTimerは予約録画開始準備の通知を受け、録画フォルダに一時ファイルを作成・削除します。&#10;同じフォルダに録画中または情報保持期間内にアクセスの記録があれば何もしませんが、&#10;判定は録画先フォルダのみで行い、ドライブの確認を行いません。"/>
                         <StackPanel Orientation="Horizontal" ToolTip="録画用アプリの起動時間×2＋1分より大きい値を設定してください。&#10;それ以下に設定すると、情報の保持効果が不十分または失われます。">
@@ -230,14 +242,22 @@
                             <Label Content="同一番組無効登録の判定で無視する文字列" ToolTip="キーワード予約の「同一番組名の録画結果があれば無効で登録する」の、&#10;比較の際に削除する文字列を正規表現で指定する。&#10;例 : \[[再無生]\]　→　[再]と[無]と[生]を無視"/>
                             <TextBox Width="120" Name="text_RecInfo2RegExp"/>
                         </DockPanel>
-                    </StackPanel>
-                    <StackPanel Name="grid_AppReserve2">
                         <CheckBox Margin="0,0,0,4" Content="キーワード予約をプログラム予約化したとき、再び追加されないようにする" Name="checkBox_CommentAutoAdd" />
                         <CheckBox Margin="0,0,0,4" Content="予約を無効にするとき、録画モードを「指定サービス」にする(旧ver互換用)" Name="checkBox_FixNoRecToServiceOnly" />
+                    </StackPanel>
+                    <StackPanel Name="grid_AppReserve2">
                         <CheckBox Margin="0,0,0,4" Content="録画情報保存フォルダ指定時は録画ファイルの場所を参照しない" Name="checkBox_recInfoFolderOnly" />
-                        <StackPanel Margin="0,0,0,4" Orientation="Horizontal" Name="stackPanel_autoDelRecInfo" >
+                        <StackPanel Margin="0,0,0,4" Orientation="Horizontal" >
                             <CheckBox Content="録画結果を自動的に削除する  保持件数" Name="checkBox_autoDelRecInfo" />
-                            <TextBox Name="textBox_autoDelRecInfo" Width="62" Margin="5,0,0,0" />
+                            <TextBox Name="textBox_autoDelRecInfo" Width="62" Margin="4,0,0,0" />
+                        </StackPanel>
+                        <Label Content="正常に録画した番組情報(RecInfo2)の" Margin="0,-4,12,0"/>
+                        <StackPanel Orientation="Horizontal" Margin="16,-4,12,4">
+                            <Label Content="蓄積数"/>
+                            <TextBox Name="textBox_RecInfo2Max" Width="62"/>
+                            <Label Content="ドロップ数しきい値" Margin="12,0,0,0" />
+                            <TextBox Name="textBox_RecInfo2DropChk" Width="62"/>
+                            <Label Content="未満" />
                         </StackPanel>
                         <CheckBox Margin="0,0,0,4" Content="録画済み一覧から削除するときに録画ファイルも削除する" Name="checkBox_recInfoDelFile" Click="checkBox_autoDel_Click" ToolTip="自動削除時(「録画結果を自動的に削除する」チェック時)にも適用されます" />
                         <CheckBox Margin="20,0,0,4" Content="同時に削除するファイルの拡張子は削除設定に従う" Name="checkBox_applyExtTo" IsEnabled="{Binding IsChecked, ElementName=checkBox_recInfoDelFile}" Click="checkBox_autoDel_Click" />
@@ -302,7 +322,7 @@
                         <CheckBox Margin="12,0,0,0" Content="変更時" IsChecked="{Binding SyncResAutoAddChange}"/>
                         <CheckBox Margin="12,0,0,0" Content="削除時" IsChecked="{Binding SyncResAutoAddDelete}"/>
                     </StackPanel>
-                    <StackPanel Orientation="Horizontal" Margin="18,-2,0,6">
+                    <StackPanel Orientation="Horizontal" Margin="20,-2,0,6">
                         <CheckBox Content="変更時、予約を一度削除してから再登録する (無効の予約を除く)" IsChecked="{Binding SyncResAutoAddChgNewRes}" IsEnabled="{Binding SyncResAutoAddChange}" ToolTip="キーワード予約無効時や検索条件変更時など、対象外となった予約が削除されるので注意が必要です。&#10;また、「録画中または開始直前の予約を変更・削除するとき警告する」が有効の場合はその設定時間、&#10;それ以外の場合は録画開始1分以内の予約は削除せず、通常の変更のみを試みます。" />
                         <CheckBox Margin="12,0,0,0" Content="変更時、録画タグを保持する(左記オプション未チェック時のみ)" IsChecked="{Binding SyncResAutoAddChgKeepRecTag}" IsEnabled="{Binding SyncResAutoAddChange}" />
                     </StackPanel>

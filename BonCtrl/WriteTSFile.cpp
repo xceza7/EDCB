@@ -2,7 +2,9 @@
 #include "WriteTSFile.h"
 
 #include "../Common/PathUtil.h"
+#ifdef _WIN32
 #include <objbase.h>
+#endif
 
 CWriteTSFile::CWriteTSFile(void)
 {
@@ -51,12 +53,12 @@ BOOL CWriteTSFile::StartSave(
 		this->subRecFlag = FALSE;
 		this->saveFolderSub = saveFolderSub_;
 		for( size_t i=0; i<saveFolder.size(); i++ ){
-			this->fileList.push_back(std::unique_ptr<SAVE_INFO>(new SAVE_INFO));
+			this->fileList.emplace_back(new SAVE_INFO);
 			SAVE_INFO& item = *this->fileList.back();
 			item.freeChk = FALSE;
 			item.writePlugIn = saveFolder[i].writePlugIn;
 			if( item.writePlugIn.size() == 0 ){
-				item.writePlugIn = L"Write_Default.dll";
+				item.writePlugIn = L"Write_Default" EDCB_LIB_EXT;
 			}
 			item.recFolder = saveFolder[i].recFolder;
 			item.recFileName = saveFolder[i].recFileName;
@@ -117,7 +119,7 @@ BOOL CWriteTSFile::AddTSBuff(
 	BOOL ret = TRUE;
 
 	{
-		CBlockLock lock(&this->outThreadLock);
+		lock_recursive_mutex lock(this->outThreadLock);
 		while( size != 0 ){
 			if( this->tsFreeList.empty() ){
 				//バッファを増やす
@@ -126,7 +128,7 @@ BOOL CWriteTSFile::AddTSBuff(
 					for( auto itr = this->tsBuffList.begin(); itr != this->tsBuffList.end(); (itr++)->clear() );
 					this->tsFreeList.splice(this->tsFreeList.end(), this->tsBuffList);
 				}else{
-					this->tsFreeList.push_back(vector<BYTE>());
+					this->tsFreeList.emplace_back();
 					this->tsFreeList.back().reserve(48128);
 				}
 			}
@@ -144,24 +146,32 @@ BOOL CWriteTSFile::AddTSBuff(
 
 void CWriteTSFile::OutThread(CWriteTSFile* sys)
 {
+#ifdef _WIN32
 	//プラグインがCOMを利用するかもしれないため
 	CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+#endif
 
 	BOOL emptyFlag = TRUE;
 	for( size_t i=0; i<sys->fileList.size(); i++ ){
-		if( sys->fileList[i]->writeUtil.Initialize(GetModulePath().replace_filename(L"Write").append(sys->fileList[i]->writePlugIn).c_str()) == FALSE ){
+		if( sys->fileList[i]->writeUtil.Initialize(
+#ifdef EDCB_LIB_ROOT
+		        fs_path(EDCB_LIB_ROOT)
+#else
+		        GetModulePath().replace_filename(L"Write")
+#endif
+		        .append(sys->fileList[i]->writePlugIn).native()) == FALSE ){
 			AddDebugLog(L"CWriteTSFile::StartSave Err 3");
 			sys->fileList[i].reset();
 		}else{
 			fs_path recFolder = sys->fileList[i]->recFolder;
 			//空き容量をあらかじめチェック
-			__int64 freeBytes = UtilGetStorageFreeBytes(recFolder);
-			bool isMainUnknownOrFree = (freeBytes < 0 || freeBytes > (__int64)sys->createSize + FREE_FOLDER_MIN_BYTES);
+			LONGLONG freeBytes = UtilGetStorageFreeBytes(recFolder);
+			bool isMainUnknownOrFree = (freeBytes < 0 || freeBytes > (LONGLONG)sys->createSize + FREE_FOLDER_MIN_BYTES);
 			if( isMainUnknownOrFree == false ){
 				//空きのあるサブフォルダを探してみる
 				vector<wstring>::iterator itrFree = std::find_if(sys->saveFolderSub.begin(), sys->saveFolderSub.end(),
 					[&](const wstring& a) { return UtilComparePath(a.c_str(), recFolder.c_str()) &&
-					                               UtilGetStorageFreeBytes(a) > (__int64)sys->createSize + FREE_FOLDER_MIN_BYTES; });
+					                               UtilGetStorageFreeBytes(a) > (LONGLONG)sys->createSize + FREE_FOLDER_MIN_BYTES; });
 				if( itrFree != sys->saveFolderSub.end() ){
 					sys->subRecFlag = TRUE;
 					recFolder = *itrFree;
@@ -176,7 +186,7 @@ void CWriteTSFile::OutThread(CWriteTSFile* sys)
 				if( isMainUnknownOrFree ){
 					vector<wstring>::iterator itrFree = std::find_if(sys->saveFolderSub.begin(), sys->saveFolderSub.end(),
 						[&](const wstring& a) { return UtilComparePath(a.c_str(), recFolder.c_str()) &&
-						                               UtilGetStorageFreeBytes(a) > (__int64)sys->createSize + FREE_FOLDER_MIN_BYTES; });
+						                               UtilGetStorageFreeBytes(a) > (LONGLONG)sys->createSize + FREE_FOLDER_MIN_BYTES; });
 					if( itrFree != sys->saveFolderSub.end() ){
 						sys->subRecFlag = TRUE;
 						startRes = sys->fileList[i]->writeUtil.Start(fs_path(*itrFree).append(sys->fileList[i]->recFileName).c_str(),
@@ -203,20 +213,22 @@ void CWriteTSFile::OutThread(CWriteTSFile* sys)
 	}
 	if( emptyFlag ){
 		AddDebugLog(L"CWriteTSFile::StartSave Err fileList 0");
+#ifdef _WIN32
 		CoUninitialize();
+#endif
 		sys->outStopState = 1;
 		sys->outStopEvent.Set();
 		return;
 	}
 	sys->outStopEvent.Set();
 	//中間状態(2)でなくなるまで待つ
-	for( ; sys->outStopState == 2; Sleep(100) );
+	for( ; sys->outStopState == 2; SleepForMsec(100) );
 	std::list<vector<BYTE>> data;
 
 	while( sys->outStopState == 0 ){
 		//バッファからデータ取り出し
 		{
-			CBlockLock lock(&sys->outThreadLock);
+			lock_recursive_mutex lock(sys->outThreadLock);
 			if( data.empty() == false ){
 				//返却
 				data.front().clear();
@@ -236,7 +248,7 @@ void CWriteTSFile::OutThread(CWriteTSFile* sys)
 						if( sys->fileList[i]->writeUtil.Write(data.front().data(), dataSize, &write) == FALSE ){
 							//空きがなくなった
 							if( i == 0 ){
-								CBlockLock lock(&sys->outThreadLock);
+								lock_recursive_mutex lock(sys->outThreadLock);
 								if( sys->writeTotalSize >= 0 ){
 									//出力サイズの加算を停止する
 									sys->writeTotalSize = -(sys->writeTotalSize + 1);
@@ -270,7 +282,7 @@ void CWriteTSFile::OutThread(CWriteTSFile* sys)
 							//原作では成否にかかわらずwriteTotalSizeにdataSizeを加算しているが
 							//出力サイズの利用ケース的にはmainSaveFilePathと一致させないとおかしいと思うので、そのように変更した
 							if( i == 0 ){
-								CBlockLock lock(&sys->outThreadLock);
+								lock_recursive_mutex lock(sys->outThreadLock);
 								if( sys->writeTotalSize >= 0 ){
 									sys->writeTotalSize += dataSize;
 								}
@@ -287,7 +299,7 @@ void CWriteTSFile::OutThread(CWriteTSFile* sys)
 
 	//残っているバッファを書き出し
 	{
-		CBlockLock lock(&sys->outThreadLock);
+		lock_recursive_mutex lock(sys->outThreadLock);
 		if( sys->tsFreeList.empty() == false && sys->tsFreeList.front().empty() == false ){
 			sys->tsBuffList.splice(sys->tsBuffList.end(), sys->tsFreeList, sys->tsFreeList.begin());
 		}
@@ -308,7 +320,9 @@ void CWriteTSFile::OutThread(CWriteTSFile* sys)
 		}
 	}
 
+#ifdef _WIN32
 	CoUninitialize();
+#endif
 }
 
 wstring CWriteTSFile::GetSaveFilePath()
@@ -320,11 +334,11 @@ wstring CWriteTSFile::GetSaveFilePath()
 //引数：
 // writeSize			[OUT]保存ファイル名
 void CWriteTSFile::GetRecWriteSize(
-	__int64* writeSize
+	LONGLONG* writeSize
 	)
 {
 	if( writeSize != NULL ){
-		CBlockLock lock(&this->outThreadLock);
+		lock_recursive_mutex lock(this->outThreadLock);
 		*writeSize = this->writeTotalSize < 0 ? -(this->writeTotalSize + 1) : this->writeTotalSize;
 	}
 }

@@ -1,29 +1,98 @@
 ﻿#include "stdafx.h"
 #include "SendTSTCPMain.h"
+#include "../../Common/StringUtil.h"
+#include "../../Common/TimeUtil.h"
+#ifndef _WIN32
+#include "../../Common/PathUtil.h"
+#include <errno.h>
+#include <fcntl.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <signal.h>
+#include <sys/ioctl.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#endif
 
+namespace
+{
 //SendTSTCPプロトコルのヘッダの送信を抑制する既定のポート範囲
-#define SEND_TS_TCP_NOHEAD_PORT_MIN 22000
-#define SEND_TS_TCP_NOHEAD_PORT_MAX 22999
+const DWORD SEND_TS_TCP_NOHEAD_PORT_MIN = 22000;
+const DWORD SEND_TS_TCP_NOHEAD_PORT_MAX = 22999;
+
+#ifdef _WIN32
 //送信先が0.0.0.1のとき待ち受ける名前付きパイプ名
-#define SEND_TS_TCP_0001_PIPE_NAME L"\\\\.\\pipe\\SendTSTCP_%d_%u"
+const WCHAR SEND_TS_TCP_0001_PIPE_NAME[] = L"\\\\.\\pipe\\SendTSTCP_%d_%u";
+
 //送信先が0.0.0.2のとき開く名前付きパイプ名
-#define SEND_TS_TCP_0002_PIPE_NAME L"\\\\.\\pipe\\BonDriver_Pipe%02d"
+const WCHAR SEND_TS_TCP_0002_PIPE_NAME[] = L"\\\\.\\pipe\\BonDriver_Pipe%02d";
+#else
+//送信先が0.0.0.1のとき待ち受けるFIFOファイル名
+const WCHAR SEND_TS_TCP_0001_FIFO_NAME[] = L"SendTSTCP_%d_%d_%d.fifo";
+const WCHAR SEND_TS_TCP_0001_FIFO_BASE[] = L"SendTSTCP_";
+const WCHAR SEND_TS_TCP_0001_FIFO_SUFFIX_PATTERN[] = L"*_*_?.fifo";
+
+//送信先(FIFOファイル)を開くためのポーリング間隔
+const DWORD SEND_TS_FIFO_OPEN_INTERVAL_MSEC = 200;
+#endif
+
 //送信バッファの最大数(サイズはAddSendData()の入力に依存)
-#define SEND_TS_TCP_BUFF_MAX 500
+const DWORD SEND_TS_TCP_BUFF_MAX = 500;
+
+//送信バッファの要素1つあたりの最大サイズ
+const DWORD SEND_TS_TCP_BUFF_ITEM_SIZE_MAX = 48128;
+
+//送信バッファのうち先行書き込み可能な最大数
+//(複数送信先の送信タイミングの同期によりパフォーマンスが低下するのを避ける)
+const DWORD SEND_TS_TCP_WRITE_AHEAD_MAX = SEND_TS_TCP_BUFF_MAX / 4;
+
 //送信先(サーバ)接続のためのポーリング間隔
-#define SEND_TS_TCP_CONNECT_INTERVAL_MSEC 2000
+const DWORD SEND_TS_TCP_CONNECT_INTERVAL_MSEC = 2000;
+
+//送信バッファ数がこの範囲内にあるとき、UDP送信に待ちバッファ数に反比例するウェイトを置く
+const DWORD SEND_TS_UDP_RATE_CONTROL_MAX = SEND_TS_TCP_BUFF_MAX / 4;
+
+SOCKET CreateNonBlockingSocket(int af, int type, int protocol)
+{
+#ifdef _WIN32
+	SOCKET sock = socket(af, type, protocol);
+	if( sock != INVALID_SOCKET ){
+		//ノンブロッキングモードへ
+		unsigned long x = 1;
+		if( ioctlsocket(sock, FIONBIO, &x) == 0 ){
+#else
+	SOCKET sock = socket(af, type | SOCK_CLOEXEC | SOCK_NONBLOCK, protocol);
+	if( sock != INVALID_SOCKET ){
+		//select()を使うので一応検査しておく
+		if( sock < FD_SETSIZE ){
+#endif
+			return sock;
+		}
+		closesocket(sock);
+	}
+	return INVALID_SOCKET;
+}
+}
 
 CSendTSTCPMain::CSendTSTCPMain(void)
 {
-	WSAData wsaData;
-	WSAStartup(MAKEWORD(2, 2), &wsaData);
+#ifdef _WIN32
+	m_wsaStartupResult = -1;
+#endif
+	m_bSendingToSomeone = false;
 }
 
 CSendTSTCPMain::~CSendTSTCPMain(void)
 {
 	StopSend();
+	ClearSendAddr();
 
-	WSACleanup();
+#ifdef _WIN32
+	if( m_wsaStartupResult == 0 ){
+		WSACleanup();
+	}
+#endif
 }
 
 //送信先を追加
@@ -33,26 +102,106 @@ DWORD CSendTSTCPMain::AddSendAddr(
 	DWORD dwPort
 	)
 {
+	if( lpcwszIP == NULL || !lpcwszIP[0] ){
+		return FALSE;
+	}
+	SEND_INFO item = {};
+	WtoUTF8(lpcwszIP, item.strIP);
+	item.port = (WORD)dwPort;
+	item.bSuppressHeader = (dwPort & 0x10000) != 0 || (SEND_TS_TCP_NOHEAD_PORT_MIN <= dwPort && dwPort <= SEND_TS_TCP_NOHEAD_PORT_MAX);
+	item.sock = INVALID_SOCKET;
+	for( size_t i = 0; i < array_size(item.pipe); i++ ){
+#ifdef _WIN32
+		item.pipe[i] = INVALID_HANDLE_VALUE;
+#else
+		item.pipe[i] = -1;
+#endif
+	}
+
+#ifdef _WIN32
+	//名前付きパイプでなければ
+	if( item.strIP != "0.0.0.1" && item.strIP != "0.0.0.2" ){
+		if( m_wsaStartupResult == -1 ){
+			WSAData wsaData;
+			m_wsaStartupResult = WSAStartup(MAKEWORD(2, 2), &wsaData);
+		}
+		if( m_wsaStartupResult != 0 ){
+			return FALSE;
+		}
+	}
+#endif
+
+	lock_recursive_mutex lock(m_sendLock);
+	if( std::find_if(m_SendList.begin(), m_SendList.end(), [&item](const SEND_INFO& a) {
+	        return a.strIP == item.strIP && a.port == item.port; }) == m_SendList.end() ){
+		m_SendList.push_back(item);
+	}
+
+	return TRUE;
+}
+
+//送信先を追加(UDP)
+//戻り値：エラーコード
+DWORD CSendTSTCPMain::AddSendAddrUdp(
+	LPCWSTR lpcwszIP,
+	DWORD dwPort,
+	BOOL broadcastFlag,
+	int maxSendSize
+	)
+{
 	if( lpcwszIP == NULL ){
 		return FALSE;
 	}
-	SEND_INFO Item;
-	WtoUTF8(lpcwszIP, Item.strIP);
-	Item.dwPort = dwPort;
-	if( SEND_TS_TCP_NOHEAD_PORT_MIN <= dwPort && dwPort <= SEND_TS_TCP_NOHEAD_PORT_MAX ){
-		//上位ワードが1のときはヘッダの送信が抑制される
-		Item.dwPort |= 0x10000;
+#ifdef _WIN32
+	if( m_wsaStartupResult == -1 ){
+		WSAData wsaData;
+		m_wsaStartupResult = WSAStartup(MAKEWORD(2, 2), &wsaData);
 	}
-	Item.sock = INVALID_SOCKET;
-	Item.pipe = INVALID_HANDLE_VALUE;
-	Item.olEvent = NULL;
-	Item.bConnect = FALSE;
+	if( m_wsaStartupResult != 0 ){
+		return FALSE;
+	}
+#endif
 
-	CBlockLock lock(&m_sendLock);
-	if( std::find_if(m_SendList.begin(), m_SendList.end(), [&Item](const SEND_INFO& a) {
-	        return a.strIP == Item.strIP && (WORD)a.dwPort == (WORD)Item.dwPort; }) == m_SendList.end() ){
-		m_SendList.push_back(Item);
+	SEND_INFO item = {};
+	item.bSuppressHeader = true;
+	item.sock = INVALID_SOCKET;
+	for( size_t i = 0; i < array_size(item.pipe); i++ ){
+#ifdef _WIN32
+		item.pipe[i] = INVALID_HANDLE_VALUE;
+#else
+		item.pipe[i] = -1;
+#endif
 	}
+	string ipA;
+	WtoUTF8(lpcwszIP, ipA);
+	char szPort[16];
+	sprintf_s(szPort, "%d", (WORD)dwPort);
+	struct addrinfo hints = {};
+	hints.ai_flags = AI_NUMERICHOST;
+	hints.ai_socktype = SOCK_DGRAM;
+	hints.ai_protocol = IPPROTO_UDP;
+	struct addrinfo* result;
+	if( getaddrinfo(ipA.c_str(), szPort, &hints, &result) != 0 ){
+		return FALSE;
+	}
+	item.udpAddrlen = result->ai_addrlen;
+	if( item.udpAddrlen <= sizeof(item.udpAddr) ){
+		std::copy((const BYTE*)result->ai_addr, (const BYTE*)result->ai_addr + item.udpAddrlen, (BYTE*)&item.udpAddr);
+		item.sock = CreateNonBlockingSocket(result->ai_family, result->ai_socktype, result->ai_protocol);
+	}
+	freeaddrinfo(result);
+	if( item.sock == INVALID_SOCKET ){
+		return FALSE;
+	}
+
+	if( broadcastFlag ){
+		BOOL b = TRUE;
+		setsockopt(item.sock, SOL_SOCKET, SO_BROADCAST, (const char*)&b, sizeof(b));
+	}
+	item.udpMaxSendSize = maxSendSize;
+
+	lock_recursive_mutex lock(m_sendLock);
+	m_SendList.push_back(item);
 
 	return TRUE;
 }
@@ -62,14 +211,20 @@ DWORD CSendTSTCPMain::AddSendAddr(
 DWORD CSendTSTCPMain::ClearSendAddr(
 	)
 {
-	if( m_sendThread.joinable() ){
+	bool bStarted = m_sendThread.joinable();
+	if( bStarted ){
 		StopSend();
-		m_SendList.clear();
-		StartSend();
-	}else{
-		m_SendList.clear();
 	}
-
+	while( m_SendList.empty() == false ){
+		//TCP系は切断済み。UDPも閉じる
+		if( m_SendList.back().sock != INVALID_SOCKET ){
+			closesocket(m_SendList.back().sock);
+		}
+		m_SendList.pop_back();
+	}
+	if( bStarted ){
+		StartSend();
+	}
 	return TRUE;
 }
 
@@ -109,13 +264,22 @@ DWORD CSendTSTCPMain::AddSendData(
 	)
 {
 	if( m_sendThread.joinable() ){
-		CBlockLock lock(&m_sendLock);
-		m_TSBuff.push_back(vector<BYTE>());
-		m_TSBuff.back().reserve(sizeof(DWORD) * 2 + dwSize);
-		m_TSBuff.back().resize(sizeof(DWORD) * 2);
-		m_TSBuff.back().insert(m_TSBuff.back().end(), pbData, pbData + dwSize);
-		if( m_TSBuff.size() > SEND_TS_TCP_BUFF_MAX ){
-			for( ; m_TSBuff.size() > SEND_TS_TCP_BUFF_MAX / 2; m_TSBuff.pop_front() );
+		lock_recursive_mutex lock(m_sendLock);
+		if( m_bSendingToSomeone ){
+			while( dwSize ){
+				//大きすぎるときは均等に分ける
+				DWORD divCount = (dwSize + SEND_TS_TCP_BUFF_ITEM_SIZE_MAX - 1) / SEND_TS_TCP_BUFF_ITEM_SIZE_MAX;
+				DWORD itemSize = min((dwSize + 187) / divCount * 188, dwSize);
+				m_TSBuff.emplace_back();
+				m_TSBuff.back().reserve(sizeof(DWORD) * 2 + itemSize);
+				m_TSBuff.back().resize(sizeof(DWORD) * 2);
+				m_TSBuff.back().insert(m_TSBuff.back().end(), pbData, pbData + itemSize);
+				pbData += itemSize;
+				dwSize -= itemSize;
+				if( m_TSBuff.size() > SEND_TS_TCP_BUFF_MAX ){
+					ClearSendBuff();
+				}
+			}
 		}
 	}
 	return TRUE;
@@ -126,85 +290,170 @@ DWORD CSendTSTCPMain::AddSendData(
 DWORD CSendTSTCPMain::ClearSendBuff(
 	)
 {
-	CBlockLock lock(&m_sendLock);
-	m_TSBuff.clear();
+	lock_recursive_mutex lock(m_sendLock);
 
+	DWORD unerasableCount = 0;
+	for( auto itr = m_SendList.begin(); itr != m_SendList.end(); itr++ ){
+		for( size_t i = 0; i < array_size(itr->pipe); i++ ){
+			unerasableCount = std::max(itr->writeAheadCount[i], unerasableCount);
+		}
+	}
+	if( m_TSBuff.size() > unerasableCount ){
+		m_TSBuff.resize(unerasableCount);
+	}
 	return TRUE;
 }
 
 void CSendTSTCPMain::SendThread(CSendTSTCPMain* pSys)
 {
-	DWORD dwCount = 0;
-	DWORD dwCheckConnectTick = GetTickCount();
-	for(;;){
-		DWORD tick = GetTickCount();
-		if( tick - dwCheckConnectTick > SEND_TS_TCP_CONNECT_INTERVAL_MSEC ){
-			dwCheckConnectTick = tick;
-			std::list<SEND_INFO>::iterator itr;
-			for( size_t i = 0;; i++ ){
-				{
-					CBlockLock lock(&pSys->m_sendLock);
-					if( i == 0 ){
-						itr = pSys->m_SendList.begin();
-					}else{
-						itr++;
-					}
-					if( itr == pSys->m_SendList.end() ){
-						break;
-					}
+#ifndef _WIN32
+	//異常終了などで残ったFIFOファイルがあれば削除する
+	EnumFindFile(fs_path(EDCB_INI_ROOT).append(SEND_TS_TCP_0001_FIFO_BASE).concat(SEND_TS_TCP_0001_FIFO_SUFFIX_PATTERN),
+	             [](UTIL_FIND_DATA& findData) -> bool {
+		if( findData.fileName.size() > wcslen(SEND_TS_TCP_0001_FIFO_BASE) ){
+			WCHAR* endp;
+			wcstol(findData.fileName.c_str() + wcslen(SEND_TS_TCP_0001_FIFO_BASE), &endp, 10);
+			if( *endp == L'_' ){
+				int pid = wcstol(endp + 1, NULL, 10);
+				if( pid > 0 && kill(pid, 0) == -1 && errno == ESRCH ){
+					AddDebugLogFormat(L"Delete remaining %ls", findData.fileName.c_str());
+					DeleteFile(fs_path(EDCB_INI_ROOT).append(findData.fileName).c_str());
 				}
-				if( itr->strIP == "0.0.0.1" ){
-					//サーバとして名前付きパイプで待ち受け
-					if( itr->olEvent == NULL ){
-						itr->olEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
-					}
-					if( itr->olEvent ){
-						if( itr->pipe == INVALID_HANDLE_VALUE ){
+			}
+		}
+		return true;
+	});
+#endif
+
+	//ヘッダのdwCount情報を3バイト目が0でない値で始める。原作は0で始めていたが仕様的に始点に意味はなく
+	//また他のTCPインタフェースのヘッダと区別しにくいため設定を誤った場合に想定外のことが起きるのを防ぐため
+	DWORD dwCount = 0x01000000;
+	DWORD dwCheckConnectTick = GetU32Tick();
+#ifdef _WIN32
+	vector<HANDLE> olEventList;
+#else
+	DWORD dwCheckFifoOpenTick = dwCheckConnectTick;
+	vector<pollfd> pfdList;
+#endif
+	int udpWaitState = 0;
+
+	for(;;){
+		DWORD tick = GetU32Tick();
+		bool bCheckConnect = tick - dwCheckConnectTick > SEND_TS_TCP_CONNECT_INTERVAL_MSEC;
+		if( bCheckConnect ){
+			dwCheckConnectTick = tick;
+		}
+#ifndef _WIN32
+		bool bCheckFifoOpen = tick - dwCheckFifoOpenTick > SEND_TS_FIFO_OPEN_INTERVAL_MSEC;
+		if( bCheckFifoOpen ){
+			dwCheckFifoOpenTick = tick;
+		}
+#endif
+		bool bSendingToSomeone = false;
+		std::list<SEND_INFO>::iterator itr;
+		for( size_t itrIndex = 0;; itrIndex++ ){
+			{
+				lock_recursive_mutex lock(pSys->m_sendLock);
+				if( itrIndex == 0 ){
+					itr = pSys->m_SendList.begin();
+				}else{
+					itr++;
+				}
+				if( itr == pSys->m_SendList.end() ){
+					break;
+				}
+			}
+			if( itr->strIP == "0.0.0.1" ){
+				//サーバとして名前付きパイプで待ち受け
+				//クライアントが短時間で切断→接続する場合のために複数インスタンス作る
+				for( size_t i = 0; i < array_size(itr->pipe); i++ ){
+#ifdef _WIN32
+					if( itr->olEvent[i] == NULL ){
+						itr->olEvent[i] = CreateEvent(NULL, TRUE, FALSE, NULL);
+						if( itr->olEvent[i] ){
 							wstring strPipe;
-							Format(strPipe, SEND_TS_TCP_0001_PIPE_NAME, (WORD)itr->dwPort, GetCurrentProcessId());
-							itr->pipe = CreateNamedPipe(strPipe.c_str(), PIPE_ACCESS_OUTBOUND | FILE_FLAG_OVERLAPPED, 0, 1, 48128, 0, 0, NULL);
-							if( itr->pipe != INVALID_HANDLE_VALUE ){
+							Format(strPipe, SEND_TS_TCP_0001_PIPE_NAME, itr->port, GetCurrentProcessId());
+							itr->pipe[i] = CreateNamedPipe(strPipe.c_str(), PIPE_ACCESS_OUTBOUND | FILE_FLAG_OVERLAPPED,
+							                               0, (DWORD)array_size(itr->pipe), 48128, 0, 0, NULL);
+							if( itr->pipe[i] != INVALID_HANDLE_VALUE ){
 								OVERLAPPED olZero = {};
-								itr->ol = olZero;
-								itr->ol.hEvent = itr->olEvent;
-								if( ConnectNamedPipe(itr->pipe, &itr->ol) == FALSE ){
+								itr->ol[i] = olZero;
+								itr->ol[i].hEvent = itr->olEvent[i];
+								if( ConnectNamedPipe(itr->pipe[i], itr->ol + i) == FALSE ){
 									DWORD err = GetLastError();
 									if( err == ERROR_PIPE_CONNECTED ){
-										itr->bConnect = TRUE;
+										itr->bConnect[i] = true;
+										itr->bPipeWriting[i] = false;
 									}else if( err != ERROR_IO_PENDING ){
-										CloseHandle(itr->pipe);
-										itr->pipe = INVALID_HANDLE_VALUE;
+										CloseHandle(itr->pipe[i]);
+										itr->pipe[i] = INVALID_HANDLE_VALUE;
 									}
 								}
 							}
-						}else if( itr->bConnect == FALSE ){
-							if( WaitForSingleObject(itr->olEvent, 0) == WAIT_OBJECT_0 ){
-								itr->bConnect = TRUE;
+						}
+					}
+					if( itr->pipe[i] != INVALID_HANDLE_VALUE ){
+						if( itr->bConnect[i] == false ){
+							if( WaitForSingleObject(itr->olEvent[i], 0) == WAIT_OBJECT_0 ){
+								itr->bConnect[i] = true;
+								itr->bPipeWriting[i] = false;
 							}
 						}
 					}
-				}else if( itr->strIP == "0.0.0.2" ){
-					//クライアントとして名前付きパイプを開く
-					if( itr->olEvent == NULL ){
-						itr->olEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
-					}
-					if( itr->olEvent && itr->pipe == INVALID_HANDLE_VALUE ){
-						wstring strPipe;
-						Format(strPipe, SEND_TS_TCP_0002_PIPE_NAME, (WORD)itr->dwPort);
-						itr->pipe = CreateFile(strPipe.c_str(), GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED, NULL);
-						if( itr->pipe != INVALID_HANDLE_VALUE ){
-							itr->bConnect = TRUE;
+#else
+					if( bCheckFifoOpen && itr->bConnect[i] == false ){
+						if( itr->strPipe[i].empty() ){
+							WCHAR name[array_size(SEND_TS_TCP_0001_FIFO_NAME) + 32];
+							swprintf_s(name, SEND_TS_TCP_0001_FIFO_NAME, itr->port, (int)getpid(), (int)i);
+							WtoUTF8(fs_path(EDCB_INI_ROOT).append(name).native(), itr->strPipe[i]);
+						}
+						itr->pipe[i] = open(itr->strPipe[i].c_str(), O_WRONLY | O_NONBLOCK | O_CLOEXEC);
+						if( itr->pipe[i] >= 0 ){
+							itr->bConnect[i] = true;
+							itr->wroteBytes[i] = 0;
+						}else if( errno == ENOENT ){
+							mkfifo(itr->strPipe[i].c_str(), S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 						}
 					}
-				}else{
+#endif
+					bSendingToSomeone = bSendingToSomeone || itr->bConnect[i];
+				}
+				udpWaitState = -1;
+			}
+#ifdef _WIN32
+			else if( itr->strIP == "0.0.0.2" ){
+				if( bCheckConnect ){
+					//クライアントとして名前付きパイプを開く
+					if( itr->olEvent[0] == NULL ){
+						itr->olEvent[0] = CreateEvent(NULL, TRUE, FALSE, NULL);
+					}
+					if( itr->olEvent[0] && itr->pipe[0] == INVALID_HANDLE_VALUE ){
+						wstring strPipe;
+						Format(strPipe, SEND_TS_TCP_0002_PIPE_NAME, itr->port);
+						itr->pipe[0] = CreateFile(strPipe.c_str(), GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED, NULL);
+						if( itr->pipe[0] != INVALID_HANDLE_VALUE ){
+							itr->bConnect[0] = true;
+							itr->bPipeWriting[0] = false;
+						}
+					}
+				}
+				bSendingToSomeone = bSendingToSomeone || itr->bConnect[0];
+				udpWaitState = -1;
+			}
+#endif
+			else if( itr->strIP.empty() ){
+				//UDP送信
+				bSendingToSomeone = true;
+			}else{
+				if( bCheckConnect ){
 					//クライアントとしてTCPで接続
-					if( itr->sock != INVALID_SOCKET && itr->bConnect == FALSE ){
+					if( itr->sock != INVALID_SOCKET && itr->bConnect[0] == false ){
 						fd_set wmask;
 						FD_ZERO(&wmask);
 						FD_SET(itr->sock, &wmask);
 						struct timeval tv = {0, 0};
 						if( select((int)itr->sock + 1, NULL, &wmask, NULL, &tv) == 1 ){
-							itr->bConnect = TRUE;
+							itr->bConnect[0] = true;
 						}else{
 							closesocket(itr->sock);
 							itr->sock = INVALID_SOCKET;
@@ -212,23 +461,22 @@ void CSendTSTCPMain::SendThread(CSendTSTCPMain* pSys)
 					}
 					if( itr->sock == INVALID_SOCKET ){
 						char szPort[16];
-						sprintf_s(szPort, "%d", (WORD)itr->dwPort);
+						sprintf_s(szPort, "%d", itr->port);
 						struct addrinfo hints = {};
 						hints.ai_flags = AI_NUMERICHOST;
 						hints.ai_socktype = SOCK_STREAM;
 						hints.ai_protocol = IPPROTO_TCP;
 						struct addrinfo* result;
 						if( getaddrinfo(itr->strIP.c_str(), szPort, &hints, &result) == 0 ){
-							itr->sock = socket(result->ai_family, result->ai_socktype, result->ai_protocol);
+							itr->sock = CreateNonBlockingSocket(result->ai_family, result->ai_socktype , result->ai_protocol);
 							if( itr->sock != INVALID_SOCKET ){
-								//ノンブロッキングモードへ
-								unsigned long x = 1;
-								if( ioctlsocket(itr->sock, FIONBIO, &x) == SOCKET_ERROR ){
-									closesocket(itr->sock);
-									itr->sock = INVALID_SOCKET;
-								}else if( connect(itr->sock, result->ai_addr, (int)result->ai_addrlen) != SOCKET_ERROR ){
-									itr->bConnect = TRUE;
+								if( connect(itr->sock, result->ai_addr, (int)result->ai_addrlen) == 0 ){
+									itr->bConnect[0] = true;
+#ifdef _WIN32
 								}else if( WSAGetLastError() != WSAEWOULDBLOCK ){
+#else
+								}else if( errno != EINPROGRESS ){
+#endif
 									closesocket(itr->sock);
 									itr->sock = INVALID_SOCKET;
 								}
@@ -237,103 +485,302 @@ void CSendTSTCPMain::SendThread(CSendTSTCPMain* pSys)
 						}
 					}
 				}
+				bSendingToSomeone = bSendingToSomeone || itr->bConnect[0];
+				udpWaitState = -1;
 			}
 		}
 
+		bool bShortWait = false;
 		std::list<vector<BYTE>> item;
-		size_t sendListSizeOrStop;
+		size_t sendListSize;
 		{
-			CBlockLock lock(&pSys->m_sendLock);
+			lock_recursive_mutex lock(pSys->m_sendLock);
+
+			if( udpWaitState < 0 || pSys->m_TSBuff.empty() || pSys->m_TSBuff.size() >= SEND_TS_UDP_RATE_CONTROL_MAX ){
+				//TCP系の送信先があるかバッファが空か溜まりすぎているので制御しない
+				udpWaitState = 0;
+			}else if( pSys->m_TSBuff.size() <= SEND_TS_UDP_RATE_CONTROL_MAX / 2 ){
+				bShortWait = true;
+				if( ++udpWaitState >= (int)(SEND_TS_UDP_RATE_CONTROL_MAX / pSys->m_TSBuff.size()) ){
+					udpWaitState = 0;
+					bShortWait = false;
+				}
+			}else{
+				if( ++udpWaitState >= (int)(SEND_TS_UDP_RATE_CONTROL_MAX / (SEND_TS_UDP_RATE_CONTROL_MAX - pSys->m_TSBuff.size())) ){
+					udpWaitState = 0;
+					bShortWait = true;
+				}
+			}
+			//送信中でないときバッファの追加を省略するため
+			pSys->m_bSendingToSomeone = bSendingToSomeone;
 
 			if( pSys->m_TSBuff.empty() == false ){
+				//バッファは先行書き込み中かもしれないのでコピーしてはいけない
 				item.splice(item.end(), pSys->m_TSBuff, pSys->m_TSBuff.begin());
 				DWORD dwCmd[2] = { dwCount, (DWORD)(item.back().size() - sizeof(DWORD) * 2) };
-				memcpy(&item.back().front(), dwCmd, sizeof(dwCmd));
+				//ヘッダは2つのリトルエンディアンのDWORD値(dwCount情報はたいてい無視される)
+				for( int i = 0; i < 2; i++ ){
+					item.back()[i * 4] = (BYTE)dwCmd[i];
+					item.back()[i * 4 + 1] = (BYTE)(dwCmd[i] >> 8);
+					item.back()[i * 4 + 2] = (BYTE)(dwCmd[i] >> 16);
+					item.back()[i * 4 + 3] = (BYTE)(dwCmd[i] >> 24);
+				}
+				//バッファを1つ消費したので先行書き込み数を1つ減らす
+				for( itr = pSys->m_SendList.begin(); itr != pSys->m_SendList.end(); itr++ ){
+					for( size_t i = 0; i < array_size(itr->pipe); i++ ){
+						if( itr->writeAheadCount[i] ){
+							itr->writeAheadCount[i]--;
+						}
+					}
+				}
 			}
 			//途中で減ることはない
-			sendListSizeOrStop = pSys->m_SendList.size();
+			sendListSize = pSys->m_SendList.size();
 		}
 
-		if( item.empty() || sendListSizeOrStop == 0 ){
-			if( pSys->m_stopSendEvent.WaitOne(item.empty() ? 100 : 0) ){
-				//キャンセルされた
-				break;
-			}
-		}else{
-			std::list<SEND_INFO>::iterator itr;
-			for( size_t i = 0; i < sendListSizeOrStop; i++ ){
+		if( pSys->m_stopSendEvent.WaitOne(item.empty() ? 100 : bShortWait ? 10 : 0) ){
+			//キャンセルされた
+			break;
+		}
+		if( item.empty() ){
+			//送るデータがない
+			continue;
+		}
+
+		//パイプ書き込み
+		bool bStop = false;
+		do{
+#ifdef _WIN32
+			olEventList.assign(1, pSys->m_stopSendEvent.Handle());
+#else
+			pfdList.resize(1);
+			pfdList.back().fd = pSys->m_stopSendEvent.Handle();
+			pfdList.back().events = POLLIN;
+#endif
+			bool bItemWriting = false;
+			for( size_t itrIndex = 0; itrIndex < sendListSize; itrIndex++ ){
 				{
-					CBlockLock lock(&pSys->m_sendLock);
-					if( i == 0 ){
+					lock_recursive_mutex lock(pSys->m_sendLock);
+					if( itrIndex == 0 ){
 						itr = pSys->m_SendList.begin();
 					}else{
 						itr++;
 					}
 				}
-				size_t adjust = item.back().size();
-				if( itr->pipe != INVALID_HANDLE_VALUE || itr->dwPort >> 16 == 1 ){
-					adjust -= sizeof(DWORD) * 2;
-				}
-				if( itr->pipe != INVALID_HANDLE_VALUE && itr->bConnect && adjust != 0 ){
-					//名前付きパイプに書き込む
-					OVERLAPPED olZero = {};
-					itr->ol = olZero;
-					itr->ol.hEvent = itr->olEvent;
-					HANDLE olEvents[] = { pSys->m_stopSendEvent.Handle(), itr->olEvent };
-					BOOL bClose = FALSE;
-					DWORD xferred;
-					if( WriteFile(itr->pipe, item.back().data() + item.back().size() - adjust, (DWORD)adjust, NULL, &itr->ol) == FALSE &&
-					    GetLastError() != ERROR_IO_PENDING ){
-						bClose = TRUE;
-					}else if( WaitForMultipleObjects(2, olEvents, FALSE, INFINITE) != WAIT_OBJECT_0 + 1 ){
-						//キャンセルされた
-						CancelIo(itr->pipe);
-						WaitForSingleObject(itr->olEvent, INFINITE);
-						sendListSizeOrStop = 0;
-					}else if( GetOverlappedResult(itr->pipe, &itr->ol, &xferred, FALSE) == FALSE || xferred < adjust ){
-						bClose = TRUE;
+				for( size_t i = 0; i < array_size(itr->pipe); i++ ){
+#ifdef _WIN32
+					if( itr->pipe[i] == INVALID_HANDLE_VALUE ||
+					    itr->bConnect[i] == false ||
+					    itr->writeAheadCount[i] > SEND_TS_TCP_WRITE_AHEAD_MAX ){
+						continue;
 					}
-					if( bClose ){
+					if( itr->bPipeWriting[i] ){
+						//書き込み状況を確認
+						const vector<BYTE>* pWritingItem = &item.back();
+						if( itr->writeAheadCount[i] ){
+							lock_recursive_mutex lock(pSys->m_sendLock);
+							auto itrAhead = pSys->m_TSBuff.cbegin();
+							std::advance(itrAhead, itr->writeAheadCount[i] - 1);
+							pWritingItem = &*itrAhead;
+						}
+						DWORD xferred;
+						BOOL bSuccess = GetOverlappedResult(itr->pipe[i], itr->ol + i, &xferred, FALSE);
+						if( bSuccess && xferred == pWritingItem->size() - 8 ){
+							//成功
+							itr->bPipeWriting[i] = false;
+							lock_recursive_mutex lock(pSys->m_sendLock);
+							itr->writeAheadCount[i]++;
+						}else if( bSuccess || GetLastError() != ERROR_IO_INCOMPLETE ){
+							//失敗
+							itr->bConnect[i] = false;
+						}else{
+							//さらに待機
+							olEventList.push_back(itr->olEvent[i]);
+							if( itr->writeAheadCount[i] == 0 ){
+								bItemWriting = true;
+							}
+						}
+					}
+					OVERLAPPED olReset = {};
+					olReset.hEvent = itr->olEvent[i];
+					if( itr->bConnect[i] && itr->bPipeWriting[i] == false ){
+						const vector<BYTE>* pWriteItem = &item.back();
+						if( itr->writeAheadCount[i] ){
+							lock_recursive_mutex lock(pSys->m_sendLock);
+							pWriteItem = NULL;
+							if( pSys->m_TSBuff.size() >= itr->writeAheadCount[i] ){
+								auto itrAhead = pSys->m_TSBuff.cbegin();
+								std::advance(itrAhead, itr->writeAheadCount[i] - 1);
+								pWriteItem = &*itrAhead;
+							}
+						}
+						if( pWriteItem ){
+							if( pWriteItem->size() > 8 ){
+								//書き込む
+								itr->ol[i] = olReset;
+								if( WriteFile(itr->pipe[i], pWriteItem->data() + 8, (DWORD)(pWriteItem->size() - 8), NULL, itr->ol + i) ||
+								    GetLastError() == ERROR_IO_PENDING ){
+									//待機
+									itr->bPipeWriting[i] = true;
+									olEventList.push_back(itr->olEvent[i]);
+									if( itr->writeAheadCount[i] == 0 ){
+										bItemWriting = true;
+									}
+								}else{
+									//失敗
+									itr->bConnect[i] = false;
+								}
+							}else if( itr->writeAheadCount[i] <= SEND_TS_TCP_WRITE_AHEAD_MAX ){
+								lock_recursive_mutex lock(pSys->m_sendLock);
+								itr->writeAheadCount[i]++;
+							}
+						}
+					}
+					if( itr->bConnect[i] == false ){
 						if( itr->strIP == "0.0.0.1" ){
 							//再び待ち受け
-							DisconnectNamedPipe(itr->pipe);
-							itr->bConnect = FALSE;
-							itr->ol = olZero;
-							itr->ol.hEvent = itr->olEvent;
-							if( ConnectNamedPipe(itr->pipe, &itr->ol) == FALSE ){
+							DisconnectNamedPipe(itr->pipe[i]);
+							itr->ol[i] = olReset;
+							if( ConnectNamedPipe(itr->pipe[i], itr->ol + i) == FALSE ){
 								DWORD err = GetLastError();
 								if( err == ERROR_PIPE_CONNECTED ){
-									itr->bConnect = TRUE;
+									itr->bConnect[i] = true;
+									itr->bPipeWriting[i] = false;
 								}else if( err != ERROR_IO_PENDING ){
-									CloseHandle(itr->pipe);
-									itr->pipe = INVALID_HANDLE_VALUE;
+									CloseHandle(itr->pipe[i]);
+									itr->pipe[i] = INVALID_HANDLE_VALUE;
 								}
 							}
 						}else{
-							CloseHandle(itr->pipe);
-							itr->pipe = INVALID_HANDLE_VALUE;
-							itr->bConnect = FALSE;
+							CloseHandle(itr->pipe[i]);
+							itr->pipe[i] = INVALID_HANDLE_VALUE;
+						}
+						lock_recursive_mutex lock(pSys->m_sendLock);
+						itr->writeAheadCount[i] = 0;
+					}
+#else
+					if( itr->pipe[i] < 0 ||
+					    itr->bConnect[i] == false ||
+					    itr->writeAheadCount[i] > SEND_TS_TCP_WRITE_AHEAD_MAX ){
+						continue;
+					}
+					const vector<BYTE>* pWriteItem = &item.back();
+					if( itr->writeAheadCount[i] ){
+						lock_recursive_mutex lock(pSys->m_sendLock);
+						pWriteItem = NULL;
+						if( pSys->m_TSBuff.size() >= itr->writeAheadCount[i] ){
+							auto itrAhead = pSys->m_TSBuff.cbegin();
+							std::advance(itrAhead, itr->writeAheadCount[i] - 1);
+							pWriteItem = &*itrAhead;
 						}
 					}
+					if( pWriteItem ){
+						if( pWriteItem->size() > 8 ){
+							//書き込む
+							int n = (int)write(itr->pipe[i], pWriteItem->data() + 8 + itr->wroteBytes[i], pWriteItem->size() - 8 - itr->wroteBytes[i]);
+							if( n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) ){
+								//失敗
+								close(itr->pipe[i]);
+								itr->pipe[i] = -1;
+								itr->bConnect[i] = false;
+								lock_recursive_mutex lock(pSys->m_sendLock);
+								itr->writeAheadCount[i]++;
+							}else{
+								if( n > 0 ){
+									itr->wroteBytes[i] += n;
+									if( itr->wroteBytes[i] >= pWriteItem->size() - 8 ){
+										itr->wroteBytes[i] = 0;
+										lock_recursive_mutex lock(pSys->m_sendLock);
+										itr->writeAheadCount[i]++;
+									}
+								}
+								//待機
+								pfdList.emplace_back();
+								pfdList.back().fd = itr->pipe[i];
+								pfdList.back().events = POLLOUT;
+								if( itr->writeAheadCount[i] == 0 ){
+									bItemWriting = true;
+								}
+							}
+						}else{
+							lock_recursive_mutex lock(pSys->m_sendLock);
+							itr->writeAheadCount[i]++;
+						}
+					}
+#endif
+				}
+			}
+			if( bItemWriting == false ){
+				//すべてのパイプにitemを書き込んだ
+				break;
+			}
+#ifdef _WIN32
+			DWORD dwRet;
+			if( olEventList.size() <= MAXIMUM_WAIT_OBJECTS ){
+				dwRet = WaitForMultipleObjects((DWORD)olEventList.size(), olEventList.data(), FALSE, INFINITE);
+			}else{
+				dwRet = WaitForMultipleObjects(MAXIMUM_WAIT_OBJECTS, olEventList.data(), FALSE, 10);
+			}
+			bStop = dwRet != WAIT_TIMEOUT && (dwRet <= WAIT_OBJECT_0 || dwRet >= WAIT_OBJECT_0 + MAXIMUM_WAIT_OBJECTS);
+#else
+			bStop = (poll(pfdList.data(), pfdList.size(), -1) < 0 && errno != EINTR) || pSys->m_stopSendEvent.WaitOne(0);
+#endif
+		}while( bStop == false );
+
+		//ネットワーク送信
+		for( size_t itrIndex = 0; bStop == false && itrIndex < sendListSize; itrIndex++ ){
+			{
+				lock_recursive_mutex lock(pSys->m_sendLock);
+				if( itrIndex == 0 ){
+					itr = pSys->m_SendList.begin();
+				}else{
+					itr++;
+				}
+			}
+			if( itr->sock != INVALID_SOCKET && (itr->strIP.empty() || itr->bConnect[0]) ){
+				size_t adjust = item.back().size();
+				if( itr->bSuppressHeader ){
+					//ヘッダの送信を抑制
+					adjust -= sizeof(DWORD) * 2;
 				}
 				for(;;){
 					if( pSys->m_stopSendEvent.WaitOne(0) ){
 						//キャンセルされた
-						sendListSizeOrStop = 0;
-						break;
-					}
-					if( itr->sock == INVALID_SOCKET || itr->bConnect == FALSE ){
+						bStop = true;
 						break;
 					}
 					if( adjust != 0 ){
-						int ret = send(itr->sock, (char*)(item.back().data() + item.back().size() - adjust), (int)adjust, 0);
-						if( ret == 0 || (ret == SOCKET_ERROR && WSAGetLastError() != WSAEWOULDBLOCK) ){
-							closesocket(itr->sock);
-							itr->sock = INVALID_SOCKET;
-							itr->bConnect = FALSE;
-							break;
-						}else if( ret != SOCKET_ERROR ){
-							adjust -= ret;
+						if( itr->strIP.empty() ){
+							//ペイロード分割。BonDriver_UDPに送る場合は受信サイズ48128以下でなければならない
+							int len = min(max(itr->udpMaxSendSize, 1), (int)adjust);
+							if( sendto(itr->sock, (char*)(item.back().data() + item.back().size() - adjust), len, 0,
+							           (const sockaddr*)&itr->udpAddr, (int)itr->udpAddrlen) >= 0 ||
+#ifdef _WIN32
+							    WSAGetLastError() != WSAEWOULDBLOCK
+#else
+							    (errno != EAGAIN && errno != EWOULDBLOCK)
+#endif
+							    ){
+								adjust -= len;
+							}
+						}else{
+							//TCP
+							int ret = (int)send(itr->sock, (char*)(item.back().data() + item.back().size() - adjust), (int)adjust, 0);
+
+							if( ret == 0 || (ret < 0 &&
+#ifdef _WIN32
+							    WSAGetLastError() != WSAEWOULDBLOCK
+#else
+							    errno != EAGAIN && errno != EWOULDBLOCK
+#endif
+							    ) ){
+								closesocket(itr->sock);
+								itr->sock = INVALID_SOCKET;
+								itr->bConnect[0] = false;
+								break;
+							}else if( ret > 0 ){
+								adjust -= ret;
+							}
 						}
 					}
 					if( adjust == 0 ){
@@ -348,36 +795,56 @@ void CSendTSTCPMain::SendThread(CSendTSTCPMain* pSys)
 					select((int)itr->sock + 1, NULL, &wmask, NULL, &tv10msec);
 				}
 			}
-			if( sendListSizeOrStop == 0 ){
-				break;
-			}
+		}
+		if( bStop ){
+			break;
 		}
 	}
 
-	CBlockLock lock(&pSys->m_sendLock);
+	lock_recursive_mutex lock(pSys->m_sendLock);
 	for( auto itr = pSys->m_SendList.begin(); itr != pSys->m_SendList.end(); itr++ ){
-		if( itr->sock != INVALID_SOCKET ){
+		//TCP系を切断
+		if( itr->sock != INVALID_SOCKET && itr->strIP.empty() == false ){
 			//未送信データが捨てられても問題ないのでshutdown()は省略
 			closesocket(itr->sock);
 			itr->sock = INVALID_SOCKET;
 		}
-		if( itr->pipe != INVALID_HANDLE_VALUE ){
-			if( itr->strIP == "0.0.0.1" ){
-				if( itr->bConnect ){
-					DisconnectNamedPipe(itr->pipe);
-				}else{
-					//待ち受けをキャンセル
-					CancelIo(itr->pipe);
-					WaitForSingleObject(itr->olEvent, INFINITE);
+		for( size_t i = 0; i < array_size(itr->pipe); i++ ){
+#ifdef _WIN32
+			if( itr->pipe[i] != INVALID_HANDLE_VALUE ){
+				if( itr->bConnect[i] && itr->bPipeWriting[i] ){
+					//書き込みをキャンセル
+					CancelIo(itr->pipe[i]);
+					WaitForSingleObject(itr->olEvent[i], INFINITE);
 				}
+				if( itr->strIP == "0.0.0.1" ){
+					if( itr->bConnect[i] ){
+						DisconnectNamedPipe(itr->pipe[i]);
+					}else{
+						//待ち受けをキャンセル
+						CancelIo(itr->pipe[i]);
+						WaitForSingleObject(itr->olEvent[i], INFINITE);
+					}
+				}
+				CloseHandle(itr->pipe[i]);
+				itr->pipe[i] = INVALID_HANDLE_VALUE;
 			}
-			CloseHandle(itr->pipe);
-			itr->pipe = INVALID_HANDLE_VALUE;
+			if( itr->olEvent[i] ){
+				CloseHandle(itr->olEvent[i]);
+				itr->olEvent[i] = NULL;
+			}
+#else
+			if( itr->strPipe[i].empty() == false ){
+				remove(itr->strPipe[i].c_str());
+				itr->strPipe[i].clear();
+			}
+			if( itr->pipe[i] >= 0 ){
+				close(itr->pipe[i]);
+				itr->pipe[i] = -1;
+			}
+#endif
+			itr->bConnect[i] = false;
+			itr->writeAheadCount[i] = 0;
 		}
-		if( itr->olEvent ){
-			CloseHandle(itr->olEvent);
-			itr->olEvent = NULL;
-		}
-		itr->bConnect = FALSE;
 	}
 }

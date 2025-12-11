@@ -30,7 +30,10 @@ public:
 	CTSOut(void);
 	~CTSOut(void);
 
-	void SetChChangeEvent(BOOL resetEpgUtil = FALSE);
+	//チャンネル変更状態に遷移する
+	void SetChChangeEvent(WORD presumedONID = 0xFFFF, BOOL resetEpgUtil = FALSE);
+
+	//GetStreamID()が失敗する状態かどうか
 	BOOL IsChUnknown(DWORD* elapsedTime = NULL);
 
 	//現在のストリームのIDを取得する
@@ -164,7 +167,7 @@ public:
 	// TRUE（成功）、FALSE（失敗）
 	//引数：
 	// id			[IN]制御識別ID
-	// sendList		[IN/OUT]送信先リスト。NULLで停止。Portは実際に送信に使用したPortが返る。
+	// sendList		[IN/OUT]送信先リスト。NULLで停止。送信に使用したポート(失敗のものは0x10000)がportにセットされる。
 	BOOL SendUdp(
 		DWORD id,
 		vector<NW_SEND_INFO>* sendList
@@ -175,7 +178,7 @@ public:
 	// TRUE（成功）、FALSE（失敗）
 	//引数：
 	// id			[IN]制御識別ID
-	// sendList		[IN/OUT]送信先リスト。NULLで停止。Portは実際に送信に使用したPortが返る。
+	// sendList		[IN/OUT]送信先リスト。NULLで停止。送信に使用したポート(失敗のものは0x10000)がportにセットされる。
 	BOOL SendTcp(
 		DWORD id,
 		vector<NW_SEND_INFO>* sendList
@@ -247,7 +250,7 @@ public:
 	// writeSize			[OUT]出力サイズ
 	void GetRecWriteSize(
 		DWORD id,
-		__int64* writeSize
+		LONGLONG* writeSize
 		);
 
 	//指定サービスの現在or次のEPG情報を取得する
@@ -348,6 +351,7 @@ protected:
 
 	enum { CH_ST_INIT, CH_ST_WAIT_PAT, CH_ST_WAIT_PAT2, CH_ST_WAIT_ID, CH_ST_DONE } chChangeState;
 	DWORD chChangeTime;
+	WORD chChangePresumedONID;
 	WORD lastONID;
 	WORD lastTSID;
 
@@ -361,9 +365,9 @@ protected:
 
 	DWORD nextCtrlID;
 
-	std::unique_ptr<FILE, decltype(&fclose)> epgFile;
+	std::unique_ptr<FILE, fclose_deleter> epgFile;
 	enum { EPG_FILE_ST_NONE, EPG_FILE_ST_PAT, EPG_FILE_ST_TOT, EPG_FILE_ST_ALL } epgFileState;
-	__int64 epgFileTotPos;
+	LONGLONG epgFileTotPos;
 	wstring epgFilePath;
 	wstring epgTempFilePath;
 	vector<pair<LONGLONG, DWORD>> logoServiceListSizeMap;
@@ -375,15 +379,13 @@ protected:
 protected:
 	void ParseEpgPacket(BYTE* data, const CTSPacketUtil& packet);
 
-	void UpdateServiceUtil(BOOL updateFilterSID);
+	void UpdateFilterServiceID();
 
-	static BOOL CALLBACK EnumLogoListProc(DWORD logoListSize, const LOGO_INFO* logoList, LPVOID param);
+	static BOOL CALLBACK EnumLogoListProc(DWORD logoListSize, const LOGO_INFO* logoList, void* param);
 
 	DWORD GetNextID();
 
 	BOOL UpdateEnableDecodeFlag();
-
-	void ResetErrCount();
 
 	void OnChChanged(WORD onid, WORD tsid);
 };

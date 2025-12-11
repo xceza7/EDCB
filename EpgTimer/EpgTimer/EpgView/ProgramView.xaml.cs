@@ -17,6 +17,8 @@ namespace EpgTimer.EpgView
         protected override double DragScroll { get { return this.EpgStyle().DragScroll; } }
         protected override bool IsMouseScrollAuto { get { return this.EpgStyle().MouseScrollAuto; } }
         protected override double ScrollSize { get { return this.EpgStyle().ScrollSize; } }
+        protected override bool IsMouseHorizontalScrollAuto { get { return this.EpgStyle().MouseHorizontalScrollAuto; } }
+        protected override double HorizontalScrollSize { get { return this.EpgStyle().HorizontalScrollSize; } }
         protected override bool IsPopEnabled { get { return this.EpgStyle().EpgPopup == true; } }
         protected override bool PopOnOver { get { return this.EpgStyle().EpgPopupMode != 1; } }
         protected override bool PopOnClick { get { return this.EpgStyle().EpgPopupMode != 0; } }
@@ -119,8 +121,14 @@ namespace EpgTimer.EpgView
             var info = toolInfo as ProgramViewItem;
             if (info.TitleDrawErr == false && this.EpgStyle().EpgToolTipNoViewOnly == true) return;
 
-            Tooltip.ToolTip = ViewUtil.GetTooltipBlockStandard(CommonManager.ConvertProgramText(info.Data,
-                this.EpgStyle().EpgExtInfoTooltip == true ? EventInfoTextMode.All : EventInfoTextMode.BasicText));
+            string text = CommonManager.ConvertProgramText(info.Data, EventInfoTextMode.BasicInfo)
+                + CommonManager.ConvertProgramText(info.Data, EventInfoTextMode.BasicText);
+            if (this.EpgStyle().EpgExtInfoTooltip)
+            {
+                text += CommonManager.TrimHyphenSpace(CommonManager.ConvertProgramText(info.Data, EventInfoTextMode.ExtendedText))
+                    + CommonManager.ConvertProgramText(info.Data, EventInfoTextMode.PropertyInfo);
+            }
+            Tooltip.ToolTip = ViewUtil.GetTooltipBlockStandard(text.TrimEnd());
         }
 
         public IEnumerable<ReserveViewItem> GetReserveViewData(Point cursorPos)

@@ -48,13 +48,13 @@ namespace EpgTimer
                 eventListEx = searchList.GetNoReserveList();
                 headData = searchList.Count == 0 ? null : searchList[0].IsReserved == true ? searchList[0].ReserveInfo as IAutoAddTargetData : searchList[0].EventInfo;
                 headDataEv = searchList.Count == 0 ? null : searchList[0].EventInfo;
-                recinfoList = eventList.SelectMany(data => MenuUtil.GetRecFileInfoList(data)).ToList();
-                headDataRec = MenuUtil.GetRecFileInfo(eventList.FirstOrDefault());
+                recinfoList = eventList.SelectMany(data => data.GetRecListFromPgUID()).ToList();
+                headDataRec = eventList.FirstOrDefault().GetRecinfoFromPgUID();
             }
             else
             {
                 //終了済み録画データの処理
-                recinfoList = dataList.OfType<ReserveDataEnd>().SelectMany(data => MenuUtil.GetRecFileInfoList(data)).ToList();
+                recinfoList = dataList.OfType<ReserveDataEnd>().SelectMany(data => data.GetRecListFromPgUID()).ToList();
                 headDataRec = recinfoList.FirstOrDefault();
                 dataList.RemoveAll(data => data is ReserveDataEnd);
 
@@ -225,14 +225,14 @@ namespace EpgTimer
             else if (eventRefData != null)
             {
                 resData = ((EpgEventInfo)eventRefData).ToReserveData();
-                resData.RecSetting = GetRecSetting() ?? Settings.Instance.RecPresetList[0].Data.DeepClone();
+                resData.RecSetting = (GetRecSetting() ?? Settings.Instance.RecPresetList[0].Data).DeepClone();
             }
             else if (recinfoList.Count != 0)
             {
                 eventRefData = recinfoList[0];
             }
 
-            var key = MenuUtil.SendAutoAddKey(eventRefData, CmdExeUtil.IsKeyGesture(e), GetSearchKey());
+            var key = MenuUtil.SendAutoAddKey(eventRefData, CmdExeUtil.IsKeyGesture(e));
             MenuUtil.SendAutoAdd(resData ?? eventRefData, CmdExeUtil.IsKeyGesture(e), key);
             IsCommandExecuted = true;
         }

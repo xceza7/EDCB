@@ -1,5 +1,8 @@
 -- vim:set ft=lua:
 dofile(mg.script_name:gsub('[^\\/]*$','')..'util.lua')
+if JKRDLOG_PATH then
+  dofile(mg.script_name:gsub('[^\\/]*$','')..'jkconst.lua')
+end
 
 function Change(id,post)
   local r=edcb.GetReserveData(id)
@@ -30,13 +33,8 @@ function Change(id,post)
     else
       local presetID=GetVarInt(post,'presetID',0,65534)
       if presetID then
-        r.recSetting=nil
-        for i,v in ipairs(edcb.EnumRecPresetInfo()) do
-          if v.id==presetID then
-            r.recSetting=v.recSetting
-            break
-          end
-        end
+        local found=BinarySearch(edcb.EnumRecPresetInfo(),{id=presetID},CompareFields('id'))
+        r.recSetting=found and found.recSetting
       end
       if r.recSetting then
         local useMargin=GetVarInt(post,'useDefMarginFlag')~=1 or nil
@@ -73,16 +71,14 @@ function Change(id,post)
   return false
 end
 
+--<0:再生画面へのリンク, 0:DLリンク, 1:トランスコード再生画面, 2～:直接再生画面(偶数:ローカルファイル再生)
 vtag=GetVarInt(mg.request_info.query_string,'vtag') or -1
 
 ct=CreateContentBuilder(GZIP_THRESHOLD_BYTE)
-ct:Append([=[
-<!DOCTYPE HTML]=]..(vtag<=0 and ' PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd"' or '')..[=[>
+ct:Append((vtag<=0 and DOCTYPE_HTML4_STRICT or '<!DOCTYPE html>\n')..[=[
 <html lang="ja">
 <head>
-<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
-<meta name="viewport" content="initial-scale=1">
-<link rel="stylesheet" type="text/css" href="default.css">
+]=]..DefaultHeadContents()..[=[
 <title>予約詳細 - EDCB</title>
 </head>
 <body>
@@ -91,10 +87,8 @@ ct:Append([=[
 ]=])
 
 id=GetVarInt(mg.request_info.query_string,'id') or 0
-offset=GetVarInt(mg.request_info.query_string,'offset',0,100)
-audio2=GetVarInt(mg.request_info.query_string,'audio2')==1
-dual=GetVarInt(mg.request_info.query_string,'dual',0,2)
-cinema=GetVarInt(mg.request_info.query_string,'cinema')==1
+fromepg=GetVarInt(mg.request_info.query_string,'fromepg')==1
+xq=GetTranscodeQueries(mg.request_info.query_string)
 
 post=AssertPost()
 if post then
@@ -107,61 +101,93 @@ if post then
   end
 end
 
+thumbs={''}
 recFilePath=edcb.GetRecFilePath(id)
 edcb.htmlEscape=15
+epgDate=0
 r=edcb.GetReserveData(id)
 if r then
-  epgInfo=ConvertEpgInfoText2(r.onid, r.tsid, r.sid, r.eid)
+  --番組表のdateクエリは今日(深夜4時区切り)を基準(=0)とする
+  epgDate=math.floor((TimeWithZone(r.startTime)-4*3600)/(24*3600))-math.floor((os.time()+(9-4)*3600)/(24*3600))
+  epgInfo=ConvertProgramText(edcb.SearchEpg(r.onid,r.tsid,r.sid,r.eid))
   dur=r.startTime.hour*3600+r.startTime.min*60+r.startTime.sec+r.durationSecond
   ct:Append('  <dl>\n'
-    ..'    <dt>番組情報</dt><dd>'..(#epgInfo>0 and '\n'..epgInfo:gsub('\r?\n','<br>\n')
-      or FormatTimeAndDuration(r.startTime, r.durationSecond)..'<br>'..r.stationName..'<br>'..r.title..'<br><br>'
+    ..'    <dt id="pginfo-term">番組情報</dt><dd'..(#epgInfo>0 and ' id="pginfo-desc">'..DecorateProgramText(epgInfo)
+      or '>'..FormatTimeAndDuration(r.startTime, r.durationSecond)..'<br>'..r.stationName..'<br>'..r.title..'<br><br>'
         ..('OriginalNetworkID:%d(0x%04X)<br>'):format(r.onid,r.onid)
         ..('TransportStreamID:%d(0x%04X)<br>'):format(r.tsid,r.tsid)
         ..('ServiceID:%d(0x%04X)<br>'):format(r.sid,r.sid)
       )..'</dd>\n'
-    ..'    <dt>ファイル →<a href="reserveinfo.html?id='..r.reserveID..(offset and '&amp;offset='..offset or '')..(audio2 and '&amp;audio2=1' or '')
-    ..(dual and '&amp;dual='..dual or '')..(cinema and '&amp;cinema=1' or '')..'&amp;vtag='..(vtag==0 and '-1">Video' or '0">DL')..'</a></dt><dd>\n')
+    ..'    <dt>ファイル</dt><dd>\n')
   ref=recFilePath and NativeToDocumentPath(recFilePath)
   if ref then
-    for i,ext in ipairs({'.mp4','.webm',''}) do
-      ff=edcb.FindFile and edcb.FindFile(recFilePath..ext,1)
+    xlist={table.unpack(MEDIA_EXTENSION_LIST)}
+    xlist[#xlist+1]=''
+    for i,ext in ipairs(xlist) do
+      ff=EdcbFindFilePlain(recFilePath..ext)
       if ff then
-        ct:Append((vtag==i and '<video autoplay controls style="max-width:95%" src="' or '<a href="')
-          ..(vtag~=0 and vtag~=i and 'reserveinfo.html?id='..r.reserveID..'&amp;vtag='..i or PathToRoot()..mg.url_encode(ref..ext):gsub('%%2f','/'))
-          ..'">/'..EdcbHtmlEscape(ref..ext)..(vtag==i and '</video>' or '</a>'))
+        if vtag==i*2 or vtag==i*2+1 then
+          if vtag%2==0 then
+            ct:Append('<div><input id="input-file" type="file" accept="video/*">'..(ext=='' and '(filename:'..mg.md5(ref:upper()):sub(27)..')' or '')..'</div>')
+          end
+          ct:Append(VideoWrapperBegin()
+            ..'<video id="video" autoplay playsinline controls '..(vtag%2==0 and 'data-' or '')..'src="'..PathToRoot()..mg.url_encode(ref..ext):gsub('%%2f','/')..'">/'..EdcbHtmlEscape(ref..ext)
+            ..'<track id="vid-meta" kind="metadata"'..(ext=='' and '' or ' src="'..PathToRoot()..mg.url_encode(ref..ext):gsub('%%2f','/'):gsub('%.[0-9A-Za-z]+$','')..'.vtt"')..' type="text/vtt" default>'
+            ..'</video>'..VideoWrapperEnd(JKRDLOG_PATH and GetChatStreamNameList(),true)..'\n'..VideoScriptTemplate(ext==''))
+        else
+          ct:Append((ext=='' and '' or '<a href="reserveinfo.html?id='..r.reserveID..(fromepg and '&amp;fromepg=1' or '')..'&amp;vtag='..(i*2+1)..'">')
+            ..'/'..EdcbHtmlEscape(ref..ext)..(ext=='' and '' or '</a>')
+            ..'\n[<a href="reserveinfo.html?id='..r.reserveID..(fromepg and '&amp;fromepg=1' or '')..'&amp;vtag='..(i*2)..'">OpenFile</a>]'
+            ..'\n[<a href="'..PathToRoot()..mg.url_encode(ref..ext):gsub('%%2f','/')..'" download>DL</a>]')
+        end
         if ext=='' then
           fsec,fsize=0,0
           f=edcb.io.open(recFilePath,'rb')
           if f then
             fsec,fsize=GetDurationSec(f)
+            if vtag<=0 then
+              thumbs=ThumbnailTemplate(f,fsec,fsize,ref)
+            end
             f:close()
           end
           ct:Append(' ('..('%dm%02ds|'):format(math.floor(fsec/60),fsec%60)..math.floor(fsize/1048576)..'M)<br>\n'
-            ..'<form method="GET" action="'..(vtag==0 and 'xcode.lua' or 'reserveinfo.html')..'"><div>\n'
+            ..'<form id="vid-form" action="'..(vtag==0 and 'xcode.lua' or 'reserveinfo.html')..'"><div>\n'
             ..(vtag==0 and '<input type="hidden" name="fname" value="'..EdcbHtmlEscape(ref)..'">\n'
-                 or '<input type="hidden" name="id" value="'..r.reserveID..'">\n<input type="hidden" name="vtag" value="10">\n')
-            ..'<input type="submit" value="xcode.lua">\n'
-            ..'offset: <select name="offset">')
-          for j=0,100,5 do
-            ct:Append('<option value="'..j..'"'..((offset or 0)==j and ' selected' or '')..'>'
-              ..(fsec>0 and ('%dm%02ds|'):format(math.floor(fsec*j/100/60),fsec*j/100%60) or '')..j..'%')
+                 or '<input type="hidden" name="id" value="'..r.reserveID..'">\n'
+                   ..(fromepg and '<input type="hidden" name="fromepg" value="1">\n' or '')
+                   ..'<input type="hidden" name="vtag" value="1">\n'
+                   ..'<input type="hidden" name="'..(vtag==1 and 're' or '')..'load" value="'..(xq.loadKey or edcb.CreateRandom and edcb.CreateRandom(8) or os.time()%86400)..'">\n')
+            ..'<button type="submit">xcode</button>\n'
+            ..'→<a href="reserveinfo.html?id='..r.reserveID..(fromepg and '&amp;fromepg=1' or '')..ConstructTranscodeQueries(xq)
+            ..'&amp;vtag='..(vtag==0 and '-1">Video' or '0">DL')..'</a>\n'
+            ..TranscodeSettingTemplate(xq,vtag==0,fsec)
+            ..(vtag==0 and '<br>※OpenFile用のファイルを作成するときは[TS-Live!以外][0m00s][x1.0]を選択してxcodeしてください\n' or '')
+            ..'</div></form>'..thumbs[1])
+          if vtag==1 then
+            src='xcode.lua?fname='..mg.url_encode(ref)..ConstructTranscodeQueries(xq)
+            ct:Append('\n'..VideoWrapperBegin()
+              ..(xq.tslive and '<canvas id="video" data-pausable="1" data-src="'..src..'"></canvas>' or
+                   '<video id="video" autoplay playsinline controls '..(ALLOW_HLS and 'data-' or '')..'src="'..src..'">xcode</video>')
+              ..VideoWrapperEnd(JKRDLOG_PATH and GetChatStreamNameList())..'\n'..TranscodeScriptTemplate(false,xq.caption,xq.jikkyo,{ofssec=fsec*(xq.offset or 0)/100,fast=xq.fast}))
+            if xq.tslive then
+              ct:Append(TsliveScriptTemplate(xq.autoCinema))
+            elseif ALLOW_HLS then
+              ct:Append(HlsScriptTemplate('xcode.lua'))
+            end
           end
-          ct:Append('</select>\n'
-            ..'<input type="checkbox" name="audio2" value="1"'..(audio2 and ' checked' or '')..'>audio2\n'
-            ..'<select name="dual">'
-            ..'<option value="0"'..(dual~=1 and dual~=2 and ' selected' or '')..'>*'
-            ..'<option value="1"'..(dual==1 and ' selected' or '')..'>dual-main'
-            ..'<option value="2"'..(dual==2 and ' selected' or '')..'>dual-sub'
-            ..'</select>\n'
-            ..'<input type="checkbox" name="cinema" value="1"'..(cinema and ' checked' or '')..'>cinema\n'
-            ..'</div></form>')
-          if vtag==10 then
-             ct:Append('\n<video autoplay controls style="max-width:95%" src="xcode.lua?fname='..mg.url_encode(ref)..(offset and '&amp;offset='..offset or '')
-               ..(audio2 and '&amp;audio2=1' or '')..(dual and '&amp;dual='..dual or '')..(cinema and '&amp;cinema=1' or '')..'">xcode.lua</video>')
-          end
+          ct:Append([=[
+<div style="display:none"><label><input type="checkbox" id="cb-ccinfo">字幕リスト</label>
+<div id="ccinfo-desc" style="display:none"></div></div>
+<script type="text/javascript" src="ccinfo_script.js"></script>
+<script type="text/javascript">
+runCCInfoScript("]=]..'vtt.lua?fname='..mg.url_encode(ref)..'",'
+  ..((vtag==i*2 or vtag==i*2+1) and 'function(uri){document.getElementById("vid-meta").src=uri;}' or 'true')
+  ..((vtag==1 or vtag==i*2 or vtag==i*2+1) and ',seekVideo,"#vid-wrap"' or ',seekVideoByFormSelect,"#vid-form"')..[=[);
+</script>
+]=])
         else
-          ct:Append(' ('..math.floor(ff[1].size/1048576)..'M)<br>\n')
+          ct:Append((vtag~=i*2 and vtag~=i*2+1 and '\n[<a href="mux_to_ts.lua?fname='..mg.url_encode(ref..ext)..'" download>Mux-to-TS</a>]' or '')
+            ..' ('..math.floor(ff.size/1048576)..'M)<br>\n')
         end
       end
     end
@@ -169,7 +195,7 @@ if r then
   ct:Append('<br></dd>\n'
     ..'    <dt>'..(r.eid==65535 and '<strong>プログラム予約</strong>' or 'プログラム予約化（プログラム予約化は元に戻せません。番組を特定できなくなるため追従もできません。）')
     ..'</dt><dd>\n'
-    ..'<form method="POST" action="reserveinfo.html?id='..r.reserveID
+    ..'<form method="POST" action="reserveinfo.html?id='..r.reserveID..(fromepg and '&amp;fromepg=1' or '')
     ..'"><div><input type="hidden" name="ctok" value="'..CsrfToken()..'">\n'
     ..'<input type="hidden" name="addchg" value="y">\n'
     ..'予約日時: <input type="text" size="4" name="start-y" value="'..r.startTime.year
@@ -182,10 +208,12 @@ if r then
     ..'">:<input type="text" size="2" name="end-i" value="'..math.floor(dur/60)%60
     ..'">:<input type="text" size="2" name="end-s" value="'..dur%60
     ..'"><br>\n'
-    ..'<input type="submit" value="変更"></div></form></dd>\n'
+    ..'<button type="submit">変更</button></div></form></dd>\n'
     ..'    <dt>プリセット</dt><dd>\n'
     ..'<form action="reserveinfo.html"><div>\n'
-    ..'<input type="hidden" name="id" value="'..r.reserveID..'"><select name="presetID">\n')
+    ..'<input type="hidden" name="id" value="'..r.reserveID..'">\n'
+    ..(fromepg and '<input type="hidden" name="fromepg" value="1">\n' or '')
+    ..'<select name="presetID">\n')
   presetID=GetVarInt(mg.request_info.query_string,'presetID') or 65535
   preset=false
   rs=r.recSetting
@@ -199,29 +227,54 @@ if r then
     end
   end
   ct:Append('<option value="65535"'..(preset and '' or ' selected')..'>予約時\n'
-    ..'</select> <input type="submit" value="録画設定にロード"></div></form></dd>\n'
+    ..'</select> <button type="submit">録画設定にロード</button></div></form></dd>\n'
     ..'    <dt>録画設定</dt><dd>\n'
-    ..'<form method="POST" action="reserveinfo.html?id='..r.reserveID
+    ..'<form method="POST" action="reserveinfo.html?id='..r.reserveID..(fromepg and '&amp;fromepg=1' or '')
     ..'"><div><input type="hidden" name="presetID" value="'..(preset and presetID or 65535)..'">\n'
     ..'<input type="hidden" name="ctok" value="'..CsrfToken()..'">\n'
     ..'<input type="hidden" name="addchg" value="y">\n'
-    ..RecSettingTemplate(rs)..'<input type="submit" value="変更"></div></form></dd>\n'
-    ..'    <dt>-</dt><dd>\n'
-    ..'<form method="POST" action="reserveinfo.html?id='..r.reserveID..'"><div>\n'
-    ..'<input type="hidden" name="ctok" value="'..CsrfToken()..'">\n'
-    ..'<input type="hidden" name="del" value="y">\n'
-    ..'<input type="submit" value="削除"></div></form></dd>\n'
+    ..RecSettingTemplate(rs)..'<button type="submit">変更</button></div></form></dd>\n'
+    ..'    <dt>-</dt><dd>\n')
+  if fromepg then
+    --一覧に戻ると使い勝手が悪いため
+    ct:Append('<form method="POST" action="reserveinfo.html?id='..r.reserveID..'"><div>\n'
+      ..'<input type="hidden" name="ctok" value="'..CsrfToken()..'">\n'
+      ..'<input type="hidden" name="del" value="y">\n')
+  else
+    ct:Append('<form method="POST" action="reserve.html"><div>\n'
+      ..'<input type="hidden" name="ctok" value="'..CsrfToken('reserve.html')..'">\n'
+      ..'<input type="hidden" name="del" value="'..r.reserveID..'">\n')
+  end
+  ct:Append('<button type="submit">削除</button></div></form></dd>\n'
     ..'  </dl>\n')
 end
-r=r or rdel
 
 ct:Append([=[
 </div>
 <div id="footer">
-  <a href="reserve.html">予約一覧</a> <a href="epg.html">番組表</a> <a href="epglist.html]=]..(r and '?id='..r.onid..'-'..r.tsid..'-'..r.sid..'#now' or '')..[=[">リスト番組表</a>
+  <a href="reserve.html]=]..(r and '?id='..r.reserveID or '')..[=[">予約一覧</a> <a href="epg.html?date=]=]..epgDate..[=[">番組表</a> <a href="epglist.html]=]
+  ..((r or rdel) and '?id='..(r or rdel).onid..'-'..(r or rdel).tsid..'-'..(r or rdel).sid..'#now' or '')..[=[">リスト番組表</a>
 </div>
+]=])
+for i=2,#thumbs do ct:Append(thumbs[i]) end
+ct:Append([=[
+<script type="text/javascript">
+(function(){
+  var desc=document.getElementById("pginfo-desc");
+  if(desc&&desc.textContent){
+    var a=document.createElement("a");
+    a.download="a.program.txt";
+    a.href=URL.createObjectURL(new Blob(["\ufeff",desc.textContent],{endings:"native",type:"text/plain"}));
+    a.innerText="(DL)";
+    document.getElementById("pginfo-term").appendChild(a);
+  }
+})();
+</script>
 </body>
 </html>
 ]=])
 ct:Finish()
-mg.write(ct:Pop(Response(200,'text/html','utf-8',ct.len)..(ct.gzip and 'Content-Encoding: gzip\r\n' or '')..'\r\n'))
+mg.write(ct:Pop(Response(200,'text/html','utf-8',ct.len,ct.gzip)
+  ..'Cross-Origin-Embedder-Policy: require-corp\r\n'
+  ..'Cross-Origin-Opener-Policy: same-origin\r\n'
+  ..'\r\n'))

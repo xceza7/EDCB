@@ -30,7 +30,7 @@ void CDropCount::AddData(const BYTE* data, DWORD size)
 			vector<DROP_INFO>::iterator itr =
 				lower_bound_first(this->infoList.begin(), this->infoList.end(), item.first);
 			if( itr == this->infoList.end() || itr->first != item.first ){
-				item.lastCounter = (CTSPacketUtil::GetContinuityCounterFrom188TS(data + i) + 15) & 0x0F;
+				item.lastCounter = 0xFF;
 				itr = this->infoList.insert(itr, item);
 			}
 			itr->total++;
@@ -39,14 +39,14 @@ void CDropCount::AddData(const BYTE* data, DWORD size)
 			}
 		}
 	}
-	DWORD tick = GetTickCount();
+	DWORD tick = GetU32Tick();
 	if( tick - this->lastLogTime > 5000 ){
 		if( this->lastLogDrop < this->drop ||
 		    this->lastLogScramble < this->scramble ){
 			SYSTEMTIME now;
 			ConvertSystemTime(GetNowI64Time(), &now);
 			char logline[256];
-			sprintf_s(logline, "%04d/%02d/%02d %02d:%02d:%02d Drop:%lld Scramble:%lld Signal: %.02f\r\n",
+			sprintf_s(logline, "%04d/%02d/%02d %02d:%02d:%02d Drop:%lld Scramble:%lld Signal: %.02f%s",
 				now.wYear,
 				now.wMonth,
 				now.wDay,
@@ -55,7 +55,8 @@ void CDropCount::AddData(const BYTE* data, DWORD size)
 				now.wSecond,
 				this->drop,
 				this->scramble,
-				this->signalLv
+				this->signalLv,
+				UTIL_NEWLINE[0] == L'\r' ? "\r\n" : "\n"
 				);
 			this->log += logline;
 			this->lastLogDrop = max(this->drop, this->lastLogDrop);
@@ -112,18 +113,27 @@ void CDropCount::CheckCounter(const BYTE* packet, DROP_INFO* info)
 {
 	BYTE adaptation_field_control = CTSPacketUtil::GetAdaptationFieldControlFrom188TS(packet);
 	BYTE continuity_counter = CTSPacketUtil::GetContinuityCounterFrom188TS(packet);
+	BYTE adaptation_field_length = packet[4];
+	BYTE discontinuity_indicator = packet[5] & 0x80;
 
 	if( CTSPacketUtil::GetTransportScramblingControlFrom188TS(packet) != 0 ){
 		info->scramble++;
 		this->scramble++;
 	}
-	
-	if( adaptation_field_control == 0x00 || adaptation_field_control == 0x02 ){
-		//ペイロードが存在しない場合は意味なし
+
+	if( adaptation_field_control == 0x00 ){
+		//意味なし
+		info->duplicateFlag = FALSE;
+	}else if( adaptation_field_control == 0x02 ){
+		//ペイロードが存在しない場合は増分なし
+		if( info->lastCounter != 0xFF && info->lastCounter != continuity_counter ){
+			if( adaptation_field_length == 0 || discontinuity_indicator == 0 ){
+				info->drop++;
+				this->drop++;
+			}
+		}
 		info->duplicateFlag = FALSE;
 	}else{
-		BYTE adaptation_field_length = packet[4];
-		BYTE discontinuity_indicator = packet[5] & 0x80;
 		if( info->lastCounter == continuity_counter ){
 			if( adaptation_field_control == 0x01 || adaptation_field_length == 0 || discontinuity_indicator == 0 ){
 				//※厳密には重送判定は前パケットとの完全比較もすべき
@@ -141,7 +151,7 @@ void CDropCount::CheckCounter(const BYTE* packet, DROP_INFO* info)
 			}
 		}else{
 			//※原作はたぶんlastCounter==15またはcontinuity_counter==0のときの連続判定がバグっていた
-			if( ((info->lastCounter + 1) & 0x0F) != continuity_counter ){
+			if( info->lastCounter != 0xFF && ((info->lastCounter + 1) & 0x0F) != continuity_counter ){
 				if( adaptation_field_control == 0x01 || adaptation_field_length == 0 || discontinuity_indicator == 0 ){
 					//カウンターが飛んだので不連続
 					//※原作はここで差分を加算する
@@ -159,14 +169,16 @@ void CDropCount::CheckCounter(const BYTE* packet, DROP_INFO* info)
 void CDropCount::SaveLog(const wstring& filePath, BOOL asUtf8)
 {
 	//※原作と異なりディレクトリの自動生成はしない
-	std::unique_ptr<FILE, decltype(&fclose)> fp(UtilOpenFile(filePath, UTIL_SECURE_WRITE), fclose);
+	std::unique_ptr<FILE, fclose_deleter> fp(UtilOpenFile(filePath, UTIL_SECURE_WRITE));
 	if( fp ){
-		fprintf_s(fp.get(), "%s%s\r\n", asUtf8 ? "\xEF\xBB\xBF" : "", this->log.c_str());
+		LPCSTR newLine = UTIL_NEWLINE[0] == L'\r' ? "\r\n" : "\n";
+		string buff = asUtf8 ? "\xEF\xBB\xBF" : "";
+		buff += this->log;
 
 		string strA;
-		for( vector<DROP_INFO>::const_iterator itr = this->infoList.begin(); itr != this->infoList.end(); itr++ ){
+		for( const DROP_INFO& item : this->infoList ){
 			LPCSTR desc = "";
-			switch( itr->first ){
+			switch( item.first ){
 			case 0x0000:
 				desc = "PAT";
 				break;
@@ -226,19 +238,26 @@ void CDropCount::SaveLog(const wstring& filePath, BOOL asUtf8)
 				break;
 			default:
 				vector<pair<WORD, wstring>>::const_iterator itrPID =
-					lower_bound_first(this->pidName.begin(), this->pidName.end(), itr->first);
-				if( itrPID != this->pidName.end() && itrPID->first == itr->first ){
+					lower_bound_first(this->pidName.begin(), this->pidName.end(), item.first);
+				if( itrPID != this->pidName.end() && itrPID->first == item.first ){
 					WtoA(itrPID->second, strA, asUtf8 ? UTIL_CONV_UTF8 : UTIL_CONV_DEFAULT);
 					desc = strA.c_str();
 				}
 				break;
 			}
-			fprintf_s(fp.get(), "PID: 0x%04X  Total:%9lld  Drop:%9lld  Scramble: %9lld  %s\r\n",
-			          itr->first, itr->total, itr->drop, itr->scramble, desc);
+			char stats[256];
+			sprintf_s(stats, "%sPID: 0x%04X  Total:%9lld  Drop:%9lld  Scramble: %9lld  ",
+			          newLine, item.first, item.total, item.drop, item.scramble);
+			buff += stats;
+			buff += desc;
 		}
 
+		buff += newLine;
+		buff += newLine;
 		WtoA(L"使用BonDriver : " + bonFile, strA, asUtf8 ? UTIL_CONV_UTF8 : UTIL_CONV_DEFAULT);
-		fprintf_s(fp.get(), "\r\n%s\r\n", strA.c_str());
+		buff += strA;
+		buff += newLine;
+		fputs(buff.c_str(), fp.get());
 	}
 }
 
@@ -247,7 +266,7 @@ void CDropCount::SetPIDName(WORD pid, const wstring& name)
 	vector<pair<WORD, wstring>>::iterator itr =
 		lower_bound_first(this->pidName.begin(), this->pidName.end(), pid);
 	if( itr == this->pidName.end() || itr->first != pid ){
-		itr = this->pidName.insert(itr, std::make_pair(pid, wstring()));
+		itr = this->pidName.emplace(itr, pid, wstring());
 	}
 	itr->second = name;
 }

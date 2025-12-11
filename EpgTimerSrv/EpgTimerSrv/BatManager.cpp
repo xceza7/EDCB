@@ -3,8 +3,10 @@
 
 #include "../../Common/SendCtrlCmd.h"
 #include "../../Common/StringUtil.h"
+#include "../../Common/TimeUtil.h"
 #include "../../Common/PathUtil.h"
 #ifndef _WIN32
+#include <signal.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
@@ -33,7 +35,7 @@ void CBatManager::Finalize()
 
 void CBatManager::AddBatWork(const BAT_WORK_INFO& info)
 {
-	CBlockLock lock(&this->managerLock);
+	lock_recursive_mutex lock(this->managerLock);
 
 	this->workList.push_back(info);
 	StartWork();
@@ -41,7 +43,7 @@ void CBatManager::AddBatWork(const BAT_WORK_INFO& info)
 
 void CBatManager::SetIdleMargin(DWORD marginSec)
 {
-	CBlockLock lock(&this->managerLock);
+	lock_recursive_mutex lock(this->managerLock);
 
 	this->idleMargin = marginSec;
 	StartWork();
@@ -49,7 +51,7 @@ void CBatManager::SetIdleMargin(DWORD marginSec)
 
 void CBatManager::SetCustomHandler(LPCWSTR ext, const std::function<void(BAT_WORK_INFO&, vector<char>&)>& handler)
 {
-	CBlockLock lock(&this->managerLock);
+	lock_recursive_mutex lock(this->managerLock);
 
 	this->customHandler = handler;
 	this->customExt = ext;
@@ -67,7 +69,7 @@ wstring CBatManager::FindExistingPath(LPCWSTR basePath) const
 		return path.native();
 	}
 	{
-		CBlockLock lock(&this->managerLock);
+		lock_recursive_mutex lock(this->managerLock);
 		if( !this->customHandler ){
 			return wstring();
 		}
@@ -78,14 +80,14 @@ wstring CBatManager::FindExistingPath(LPCWSTR basePath) const
 
 bool CBatManager::IsWorking() const
 {
-	CBlockLock lock(&this->managerLock);
+	lock_recursive_mutex lock(this->managerLock);
 
 	return this->workList.empty() == false;
 }
 
 bool CBatManager::IsWorkingWithoutNotification() const
 {
-	CBlockLock lock(&this->managerLock);
+	lock_recursive_mutex lock(this->managerLock);
 
 	return std::find_if(this->workList.begin(), this->workList.end(),
 	                    [](const BAT_WORK_INFO& a) { return a.macroList.empty() || a.macroList[0].first != "NotifyID"; }) != this->workList.end();
@@ -93,7 +95,7 @@ bool CBatManager::IsWorkingWithoutNotification() const
 
 void CBatManager::StartWork()
 {
-	CBlockLock lock(&this->managerLock);
+	lock_recursive_mutex lock(this->managerLock);
 
 	//ワーカスレッドが終了しようとしているときはその完了を待つ
 	if( this->batWorkThread.joinable() && this->batWorkExitingFlag ){
@@ -116,12 +118,12 @@ void CBatManager::BatWorkThread(CBatManager* sys)
 	BAT_WORK_INFO notifyWork;
 	for(;;){
 		while( notifyWorkWait && sys->batWorkStopFlag == false && sys->IsWorking() == false ){
-			DWORD tick = GetTickCount();
+			DWORD tick = GetU32Tick();
 			sys->batWorkEvent.WaitOne(notifyWorkWait);
-			DWORD diff = GetTickCount() - tick;
+			DWORD diff = GetU32Tick() - tick;
 			notifyWorkWait -= min(diff, notifyWorkWait);
 			if( notifyWorkWait == 0 ){
-				CBlockLock lock(&sys->managerLock);
+				lock_recursive_mutex lock(sys->managerLock);
 				sys->workList.push_back(std::move(notifyWork));
 			}
 		}
@@ -134,7 +136,7 @@ void CBatManager::BatWorkThread(CBatManager* sys)
 		bool workable = true;
 		std::function<void(BAT_WORK_INFO&, vector<char>&)> customHandler_;
 		{
-			CBlockLock lock(&sys->managerLock);
+			lock_recursive_mutex lock(sys->managerLock);
 			if( sys->workList.empty() ){
 				//このフラグを立てたあとは二度とロックを確保してはいけない
 				sys->batWorkExitingFlag = true;
@@ -164,7 +166,7 @@ void CBatManager::BatWorkThread(CBatManager* sys)
 			vector<char> buff;
 			if( sys->CreateBatFile(work, exBatMargin, exNotifyInterval, exSW, exDirect, buff) ){
 				{
-					CBlockLock lock(&sys->managerLock);
+					lock_recursive_mutex lock(sys->managerLock);
 					if( sys->idleMargin < exBatMargin ){
 						//アイドル時間に余裕がないので中止
 						sys->batWorkExitingFlag = true;
@@ -190,9 +192,8 @@ void CBatManager::BatWorkThread(CBatManager* sys)
 					if( exDirect == false && sys->notifyManager.IsGUI() == false ){
 						//表示できないのでGUI経由で起動してみる
 						CSendCtrlCmd ctrlCmd;
-						vector<DWORD> registGUI = sys->notifyManager.GetRegistGUI();
-						for( size_t i = 0; i < registGUI.size(); i++ ){
-							ctrlCmd.SetPipeSetting(CMD2_GUI_CTRL_PIPE, registGUI[i]);
+						for( DWORD guiProcessID : sys->notifyManager.GetRegistGUI() ){
+							ctrlCmd.SetPipeSetting(CMD2_GUI_CTRL_PIPE, guiProcessID);
 							DWORD pid;
 							if( ctrlCmd.SendGUIExecute(L'"' + work.batFilePath + L'"', &pid) == CMD_SUCCESS ){
 								//ハンドル開く前に終了するかもしれない
@@ -231,10 +232,11 @@ void CBatManager::BatWorkThread(CBatManager* sys)
 								exePath = szComSpec;
 							}
 						}
-						vector<WCHAR> strBuff(strParam.c_str(), strParam.c_str() + strParam.size() + 1);
+						//CreateProcess()のlpCommandLineはconstでないため
+						strParam += L'\0';
 						//ここで短絡評価するとC4701(piが未初期化)になる。おそらく偽陽性
 						if( exePath.empty() == false ){
-							if( CreateProcess(exePath.c_str(), strBuff.data(), NULL, NULL, FALSE,
+							if( CreateProcess(exePath.c_str(), &strParam.front(), NULL, NULL, FALSE,
 							                  BELOW_NORMAL_PRIORITY_CLASS | (exDirect ? CREATE_UNICODE_ENVIRONMENT : 0),
 							                  exDirect ? const_cast<LPWSTR>(CreateEnvironment(work).c_str()) : NULL,
 							                  exDirect ? fs_path(work.batFilePath).parent_path().c_str() : NULL, &si, &pi) ){
@@ -257,13 +259,18 @@ void CBatManager::BatWorkThread(CBatManager* sys)
 					WtoUTF8(work.batFilePath, execPath);
 					string execDir;
 					WtoUTF8(fs_path(work.batFilePath).parent_path().native(), execDir);
+					vector<string> macroValList(work.macroList.size());
+					for( size_t i = 0; i < macroValList.size(); i++ ){
+						WtoUTF8(work.macroList[i].second, macroValList[i]);
+					}
 					pid_t pid = fork();
 					if( pid == 0 ){
-						if( chdir(execDir.c_str()) == 0 ){
-							for( size_t i = 0; i < work.macroList.size(); i++ ){
-								string strVal;
-								WtoUTF8(work.macroList[i].second, strVal);
-								setenv(work.macroList[i].first.c_str(), strVal.c_str(), 0);
+						//シグナルマスクを初期化
+						sigset_t sset;
+						sigemptyset(&sset);
+						if( sigprocmask(SIG_SETMASK, &sset, NULL) == 0 && chdir(execDir.c_str()) == 0 ){
+							for( size_t i = 0; i < macroValList.size(); i++ ){
+								setenv(work.macroList[i].first.c_str(), macroValList[i].c_str(), 0);
 							}
 							execl(execPath.c_str(), execPath.c_str(), NULL);
 						}
@@ -284,7 +291,7 @@ void CBatManager::BatWorkThread(CBatManager* sys)
 			AddDebugLogFormat(L"BAT拡張子エラー：%ls", work.batFilePath.c_str());
 		}
 
-		CBlockLock lock(&sys->managerLock);
+		lock_recursive_mutex lock(sys->managerLock);
 		sys->workList.erase(sys->workList.begin());
 	}
 }
@@ -292,7 +299,7 @@ void CBatManager::BatWorkThread(CBatManager* sys)
 bool CBatManager::CreateBatFile(BAT_WORK_INFO& info, DWORD& exBatMargin, DWORD& exNotifyInterval, WORD& exSW, bool& exDirect, vector<char>& buff) const
 {
 	//バッチの作成
-	std::unique_ptr<FILE, decltype(&fclose)> fp(UtilOpenFile(info.batFilePath, UTIL_SECURE_READ), fclose);
+	std::unique_ptr<FILE, fclose_deleter> fp(UtilOpenFile(info.batFilePath, UTIL_SECURE_READ));
 	if( !fp ){
 		return false;
 	}
@@ -316,7 +323,7 @@ bool CBatManager::CreateBatFile(BAT_WORK_INFO& info, DWORD& exBatMargin, DWORD& 
 		exFormatTime = false;
 	}
 #endif
-	__int64 fileSize = 0;
+	LONGLONG fileSize = 0;
 	char olbuff[257];
 	for( size_t n = fread(olbuff, 1, 256, fp.get()); ; n = fread(olbuff + 64, 1, 192, fp.get()) + 64 ){
 		olbuff[n] = '\0';
@@ -364,12 +371,16 @@ bool CBatManager::CreateBatFile(BAT_WORK_INFO& info, DWORD& exBatMargin, DWORD& 
 			continue;
 		}
 		for( size_t j = 0; j < info.macroList[i].second.size(); j++ ){
-			//制御文字とダブルクォートは置き換える
+			//制御文字は置き換える
 			if( (L'\x1' <= info.macroList[i].second[j] && info.macroList[i].second[j] <= L'\x1f') || info.macroList[i].second[j] == L'\x7f' ){
 				info.macroList[i].second[j] = L'〓';
-			}else if( info.macroList[i].second[j] == L'"' ){
+			}
+#ifdef _WIN32
+			//ダブルクォートも置き換える
+			else if( info.macroList[i].second[j] == L'"' ){
 				info.macroList[i].second[j] = L'”';
 			}
+#endif
 		}
 		i++;
 	}

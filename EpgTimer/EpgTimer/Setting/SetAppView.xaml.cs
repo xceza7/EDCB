@@ -224,7 +224,10 @@ namespace EpgTimer.Setting
             checkBox_ng_shareFile.IsChecked = IniFileHandler.GetPrivateProfileBool("NO_SUSPEND", "NoShareFile", false, SettingPath.TimerSrvIniPath);
 
             checkBox_appMin.IsChecked = IniFileHandler.GetPrivateProfileBool("SET", "RecMinWake", true, SettingPath.TimerSrvIniPath);
-            checkBox_appView.IsChecked = IniFileHandler.GetPrivateProfileBool("SET", "RecView", true, SettingPath.TimerSrvIniPath);
+            int recView= IniFileHandler.GetPrivateProfileInt("SET", "RecView", 1, SettingPath.TimerSrvIniPath);
+            checkBox_appOpenViewing.IsChecked = (recView & 1) != 0;
+            checkBox_appOpenRec.IsChecked = (recView & 2) != 0;
+            checkBox_appOpenAlways.IsChecked = (recView & 4) != 0;
             checkBox_appDrop.IsChecked = IniFileHandler.GetPrivateProfileBool("SET", "DropLog", true, SettingPath.TimerSrvIniPath);
             checkBox_addPgInfo.IsChecked = IniFileHandler.GetPrivateProfileBool("SET", "PgInfoLog", true, SettingPath.TimerSrvIniPath);
             checkBox_PgInfoLogAsUtf8.IsChecked = IniFileHandler.GetPrivateProfileBool("SET", "PgInfoLogAsUtf8", false, SettingPath.TimerSrvIniPath);
@@ -243,6 +246,8 @@ namespace EpgTimer.Setting
             checkBox_recInfoFolderOnly.IsChecked = IniFileHandler.GetPrivateProfileBool("SET", "RecInfoFolderOnly", true, SettingPath.TimerSrvIniPath);
             checkBox_autoDelRecInfo.IsChecked = IniFileHandler.GetPrivateProfileBool("SET", "AutoDelRecInfo", false, SettingPath.TimerSrvIniPath);
             textBox_autoDelRecInfo.Text = IniFileHandler.GetPrivateProfileInt("SET", "AutoDelRecInfoNum", 100, SettingPath.TimerSrvIniPath).ToString();
+            textBox_RecInfo2Max.Text = IniFileHandler.GetPrivateProfileInt("SET", "RecInfo2Max", 1000, SettingPath.TimerSrvIniPath).ToString();
+            textBox_RecInfo2DropChk.Text = IniFileHandler.GetPrivateProfileInt("SET", "RecInfo2DropChk", 2, SettingPath.TimerSrvIniPath).ToString();
             checkBox_recInfoDelFile.IsChecked = IniFileHandler.GetPrivateProfileBool("SET", "RecInfoDelFile", false, SettingPath.CommonIniPath);
             checkBox_applyExtTo.IsChecked = IniFileHandler.GetPrivateProfileBool("SET", "ApplyExtToRecInfoDel", false, SettingPath.TimerSrvIniPath);
             checkBox_autoDel.IsChecked = IniFileHandler.GetPrivateProfileBool("SET", "AutoDel", false, SettingPath.TimerSrvIniPath);
@@ -313,7 +318,7 @@ namespace EpgTimer.Setting
             //1 録画動作
             IniFileHandler.WritePrivateProfileString("SET", "WakeTime", textBox_pcWakeTime.Text, SettingPath.TimerSrvIniPath);
 
-            List<String> ngProcessList = listBox_process.Items.OfType<string>().ToList();
+            List<string> ngProcessList = listBox_process.Items.OfType<string>().ToList();
             IniFileHandler.WritePrivateProfileString("NO_SUSPEND", "Count", ngProcessList.Count, SettingPath.TimerSrvIniPath);
             IniFileHandler.DeletePrivateProfileNumberKeys("NO_SUSPEND", SettingPath.TimerSrvIniPath);
             for (int i = 0; i < ngProcessList.Count; i++)
@@ -328,7 +333,10 @@ namespace EpgTimer.Setting
             IniFileHandler.WritePrivateProfileString("NO_SUSPEND", "NoShareFile", checkBox_ng_shareFile.IsChecked, SettingPath.TimerSrvIniPath);
 
             IniFileHandler.WritePrivateProfileString("SET", "RecMinWake", checkBox_appMin.IsChecked, SettingPath.TimerSrvIniPath);
-            IniFileHandler.WritePrivateProfileString("SET", "RecView", checkBox_appView.IsChecked, SettingPath.TimerSrvIniPath);
+            IniFileHandler.WritePrivateProfileString("SET", "RecView"
+                , Convert.ToInt32(checkBox_appOpenViewing.IsChecked)
+                + Convert.ToInt32(checkBox_appOpenRec.IsChecked) * 2
+                + Convert.ToInt32(checkBox_appOpenAlways.IsChecked) * 4, SettingPath.TimerSrvIniPath);
             IniFileHandler.WritePrivateProfileString("SET", "DropLog", checkBox_appDrop.IsChecked, SettingPath.TimerSrvIniPath);
             IniFileHandler.WritePrivateProfileString("SET", "PgInfoLog", checkBox_addPgInfo.IsChecked, SettingPath.TimerSrvIniPath);
             IniFileHandler.WritePrivateProfileString("SET", "PgInfoLogAsUtf8", checkBox_PgInfoLogAsUtf8.IsChecked, SettingPath.TimerSrvIniPath);
@@ -347,12 +355,14 @@ namespace EpgTimer.Setting
             IniFileHandler.WritePrivateProfileString("SET", "RecInfo2RegExp", text_RecInfo2RegExp.Text, "", SettingPath.TimerSrvIniPath);
             IniFileHandler.WritePrivateProfileString("SET", "AutoDelRecInfo", checkBox_autoDelRecInfo.IsChecked, SettingPath.TimerSrvIniPath);
             IniFileHandler.WritePrivateProfileString("SET", "AutoDelRecInfoNum", textBox_autoDelRecInfo.Text, SettingPath.TimerSrvIniPath);
+            IniFileHandler.WritePrivateProfileString("SET", "RecInfo2Max", textBox_RecInfo2Max.Text, SettingPath.TimerSrvIniPath);
+            IniFileHandler.WritePrivateProfileString("SET", "RecInfo2DropChk", textBox_RecInfo2DropChk.Text, SettingPath.TimerSrvIniPath);
             IniFileHandler.WritePrivateProfileString("SET", "RecInfoDelFile", checkBox_recInfoDelFile.IsChecked, false, SettingPath.CommonIniPath);
             IniFileHandler.WritePrivateProfileString("SET", "ApplyExtToRecInfoDel", checkBox_applyExtTo.IsChecked, SettingPath.TimerSrvIniPath);
             IniFileHandler.WritePrivateProfileString("SET", "AutoDel", checkBox_autoDel.IsChecked, SettingPath.TimerSrvIniPath);
 
-            List<String> extList = listBox_ext.Items.OfType<string>().ToList();
-            List<String> delChkFolderList = ViewUtil.GetFolderList(listBox_chk_folder);
+            List<string> extList = listBox_ext.Items.OfType<string>().ToList();
+            List<string> delChkFolderList = ViewUtil.GetFolderList(listBox_chk_folder);
             IniFileHandler.WritePrivateProfileString("DEL_EXT", "Count", extList.Count, SettingPath.TimerSrvIniPath);
             IniFileHandler.DeletePrivateProfileNumberKeys("DEL_EXT", SettingPath.TimerSrvIniPath);
             for (int i = 0; i < extList.Count; i++)

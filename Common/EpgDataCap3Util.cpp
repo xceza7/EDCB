@@ -3,14 +3,10 @@
 
 #include "ErrDef.h"
 #include "PathUtil.h"
-#ifndef _WIN32
-#include "StringUtil.h"
-#include <dlfcn.h>
-#endif
 
 CEpgDataCap3Util::CEpgDataCap3Util(void)
+	: module(NULL, UtilFreeLibrary)
 {
-	module = NULL;
 	id = 0;
 }
 
@@ -27,40 +23,37 @@ DWORD CEpgDataCap3Util::Initialize(
 	if( module != NULL ){
 		return FALSE;
 	}
-#ifdef _WIN32
-	fs_path path = loadDllFilePath ? loadDllFilePath : GetModulePath().replace_filename(L"EpgDataCap3.dll");
-	module = LoadLibrary(path.c_str());
-	auto getProcAddr = [=](const char* name) { return GetProcAddress((HMODULE)module, name); };
+	fs_path path = loadDllFilePath ? loadDllFilePath :
+#ifdef EDCB_LIB_ROOT
+		fs_path(EDCB_LIB_ROOT).append(
 #else
-	fs_path path = loadDllFilePath ? loadDllFilePath : GetModulePath().replace_filename(L"EpgDataCap3.so");
-	string strPath;
-	WtoUTF8(path.native(), strPath);
-	module = dlopen(strPath.c_str(), RTLD_LAZY);
-	auto getProcAddr = [=](const char* name) { return dlsym(module, name); };
+		GetModulePath().replace_filename(
 #endif
+		L"EpgDataCap3" EDCB_LIB_EXT
+		);
+	module.reset(UtilLoadLibrary(path));
 	DWORD err = FALSE;
 	if( module != NULL ){
-		pfnSetDebugLogCallbackEP3 = (SetDebugLogCallbackEP3)getProcAddr("SetDebugLogCallbackEP");
-		if( pfnSetDebugLogCallbackEP3 ){
+		if( UtilGetProcAddress(module.get(), "SetDebugLogCallbackEP", pfnSetDebugLogCallbackEP3) ){
 			pfnSetDebugLogCallbackEP3(DebugLogCallback);
 		}
 		InitializeEP3 pfnInitializeEP3;
-		if( (pfnInitializeEP3 = (InitializeEP3)getProcAddr("InitializeEP")) != NULL &&
-		    (pfnUnInitializeEP3 = (UnInitializeEP3)getProcAddr("UnInitializeEP")) != NULL &&
-		    (pfnAddTSPacketEP3 = (AddTSPacketEP3)getProcAddr("AddTSPacketEP")) != NULL &&
-		    (pfnGetTSIDEP3 = (GetTSIDEP3)getProcAddr("GetTSIDEP")) != NULL &&
-		    (pfnGetEpgInfoListEP3 = (GetEpgInfoListEP3)getProcAddr("GetEpgInfoListEP")) != NULL &&
-		    (pfnClearSectionStatusEP3 = (ClearSectionStatusEP3)getProcAddr("ClearSectionStatusEP")) != NULL &&
-		    (pfnGetSectionStatusEP3 = (GetSectionStatusEP3)getProcAddr("GetSectionStatusEP")) != NULL &&
-		    (pfnGetServiceListActualEP3 = (GetServiceListActualEP3)getProcAddr("GetServiceListActualEP")) != NULL &&
-		    (pfnGetServiceListEpgDBEP3 = (GetServiceListEpgDBEP3)getProcAddr("GetServiceListEpgDBEP")) != NULL &&
-		    (pfnGetEpgInfoEP3 = (GetEpgInfoEP3)getProcAddr("GetEpgInfoEP")) != NULL &&
-		    (pfnSearchEpgInfoEP3 = (SearchEpgInfoEP3)getProcAddr("SearchEpgInfoEP")) != NULL &&
-		    (pfnGetTimeDelayEP3 = (GetTimeDelayEP3)getProcAddr("GetTimeDelayEP")) != NULL ){
-			pfnEnumEpgInfoListEP3 = (EnumEpgInfoListEP3)getProcAddr("EnumEpgInfoListEP");
-			pfnGetSectionStatusServiceEP3 = (GetSectionStatusServiceEP3)getProcAddr("GetSectionStatusServiceEP");
-			pfnSetLogoTypeFlagsEP3 = (SetLogoTypeFlagsEP3)getProcAddr("SetLogoTypeFlagsEP");
-			pfnEnumLogoListEP3 = (EnumLogoListEP3)getProcAddr("EnumLogoListEP");
+		if( UtilGetProcAddress(module.get(), "InitializeEP", pfnInitializeEP3) &&
+		    UtilGetProcAddress(module.get(), "UnInitializeEP", pfnUnInitializeEP3) &&
+		    UtilGetProcAddress(module.get(), "AddTSPacketEP", pfnAddTSPacketEP3) &&
+		    UtilGetProcAddress(module.get(), "GetTSIDEP", pfnGetTSIDEP3) &&
+		    UtilGetProcAddress(module.get(), "GetEpgInfoListEP", pfnGetEpgInfoListEP3) &&
+		    UtilGetProcAddress(module.get(), "ClearSectionStatusEP", pfnClearSectionStatusEP3) &&
+		    UtilGetProcAddress(module.get(), "GetSectionStatusEP", pfnGetSectionStatusEP3) &&
+		    UtilGetProcAddress(module.get(), "GetServiceListActualEP", pfnGetServiceListActualEP3) &&
+		    UtilGetProcAddress(module.get(), "GetServiceListEpgDBEP", pfnGetServiceListEpgDBEP3) &&
+		    UtilGetProcAddress(module.get(), "GetEpgInfoEP", pfnGetEpgInfoEP3) &&
+		    UtilGetProcAddress(module.get(), "SearchEpgInfoEP", pfnSearchEpgInfoEP3) &&
+		    UtilGetProcAddress(module.get(), "GetTimeDelayEP", pfnGetTimeDelayEP3) ){
+			UtilGetProcAddress(module.get(), "EnumEpgInfoListEP", pfnEnumEpgInfoListEP3);
+			UtilGetProcAddress(module.get(), "GetSectionStatusServiceEP", pfnGetSectionStatusServiceEP3);
+			UtilGetProcAddress(module.get(), "SetLogoTypeFlagsEP", pfnSetLogoTypeFlagsEP3);
+			UtilGetProcAddress(module.get(), "EnumLogoListEP", pfnEnumLogoListEP3);
 			err = pfnInitializeEP3(asyncFlag, &id);
 			if( err == NO_ERR ){
 				if( id != 0 ){
@@ -90,12 +83,7 @@ DWORD CEpgDataCap3Util::UnInitialize(
 	if( pfnSetDebugLogCallbackEP3 ){
 		pfnSetDebugLogCallbackEP3(NULL);
 	}
-#ifdef _WIN32
-	FreeLibrary((HMODULE)module);
-#else
-	dlclose(module);
-#endif
-	module = NULL;
+	module.reset();
 	return err;
 }
 
@@ -122,6 +110,9 @@ DWORD CEpgDataCap3Util::GetTSID(
 {
 	if( module == NULL ){
 		return ERR_NOT_INIT;
+	}
+	if( originalNetworkID == NULL && pfnEnumEpgInfoListEP3 == NULL ){
+		return ERR_INVALID_ARG;
 	}
 	return pfnGetTSIDEP3(id, originalNetworkID, transportStreamID);
 }
@@ -166,8 +157,8 @@ DWORD CEpgDataCap3Util::EnumEpgInfoList(
 	WORD originalNetworkID,
 	WORD transportStreamID,
 	WORD serviceID,
-	BOOL (CALLBACK *enumEpgInfoListProc)(DWORD epgInfoListSize, EPG_EVENT_INFO* epgInfoList, LPVOID param),
-	LPVOID param
+	BOOL (CALLBACK *enumEpgInfoListProc)(DWORD epgInfoListSize, EPG_EVENT_INFO* epgInfoList, void* param),
+	void* param
 	)
 {
 	if( module == NULL ){
@@ -258,8 +249,8 @@ void CEpgDataCap3Util::SetLogoTypeFlags(
 }
 
 DWORD CEpgDataCap3Util::EnumLogoList(
-	BOOL (CALLBACK *enumLogoListProc)(DWORD logoListSize, const LOGO_INFO* logoList, LPVOID param),
-	LPVOID param
+	BOOL (CALLBACK *enumLogoListProc)(DWORD logoListSize, const LOGO_INFO* logoList, void* param),
+	void* param
 	)
 {
 	if( module == NULL ){
@@ -284,6 +275,7 @@ void CALLBACK CEpgDataCap3Util::DebugLogCallback(
 	const WCHAR* s
 	)
 {
+	(void)s;
 #ifdef WRAP_DEBUG_OUTPUT
 	AddDebugLogNoNewline(s, true);
 #endif

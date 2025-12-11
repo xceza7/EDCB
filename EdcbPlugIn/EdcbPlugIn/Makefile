@@ -1,5 +1,5 @@
 TARGET ?= EdcbPlugIn
-CPPFLAGS := -I. -DNDEBUG -DWIN32 -D_WINDOWS -D_UNICODE -DUNICODE $(CPPFLAGS)
+CPPFLAGS := -I. -DNDEBUG -D_WINDOWS -DEDCBPLUGIN_EXPORTS -D_UNICODE -DUNICODE $(CPPFLAGS)
 CXXFLAGS := -std=c++17 -pedantic-errors -Os $(CXXFLAGS)
 LDFLAGS2 = -Wl,-s,--dynamicbase,--nxcompat,--kill-at -static-libgcc -static-libstdc++ -shared $(LDFLAGS)
 WINDRES ?= windres
@@ -9,17 +9,19 @@ CUR_ALL_H := $(wildcard *.h)
 $(TARGET).tvtp: $(addsuffix .obj, \
   BonCtrl__CATUtil.cpp \
   BonCtrl__CreatePATPacket.cpp \
+  BonCtrl__CreatePMTPacket.cpp \
   BonCtrl__DropCount.cpp \
   BonCtrl__PMTUtil.cpp \
-  BonCtrl__SendTCP.cpp \
   BonCtrl__ServiceFilter.cpp \
   Common__CtrlCmdUtil.cpp \
   Common__EpgDataCap3Util.cpp \
   Common__EpgTimerUtil.cpp \
+  Common__IniUtil.cpp \
   Common__ParseTextInstances.cpp \
   Common__PathUtil.cpp \
   Common__PipeServer.cpp \
   Common__SendCtrlCmd.cpp \
+  Common__SendTSTCPDllUtil.cpp \
   Common__StringUtil.cpp \
   Common__TimeUtil.cpp \
   Common__TSBuffUtil.cpp \

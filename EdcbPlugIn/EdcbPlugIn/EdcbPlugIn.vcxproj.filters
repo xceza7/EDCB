@@ -96,8 +96,8 @@
     <ClInclude Include="..\..\Common\ParseTextInstances.h">
       <Filter>ヘッダー ファイル\Common</Filter>
     </ClInclude>
-    <ClInclude Include="..\..\BonCtrl\SendTCP.h">
-      <Filter>ヘッダー ファイル\BonCtrl</Filter>
+    <ClInclude Include="..\..\Common\SendTSTCPDllUtil.h">
+      <Filter>ヘッダー ファイル\Common</Filter>
     </ClInclude>
     <ClInclude Include="..\..\BonCtrl\BonCtrlDef.h">
       <Filter>ヘッダー ファイル\BonCtrl</Filter>
@@ -111,11 +111,17 @@
     <ClInclude Include="..\..\BonCtrl\CreatePATPacket.h">
       <Filter>ヘッダー ファイル\BonCtrl</Filter>
     </ClInclude>
+    <ClInclude Include="..\..\BonCtrl\CreatePMTPacket.h">
+      <Filter>ヘッダー ファイル\BonCtrl</Filter>
+    </ClInclude>
     <ClInclude Include="..\..\BonCtrl\PMTUtil.h">
       <Filter>ヘッダー ファイル\BonCtrl</Filter>
     </ClInclude>
     <ClInclude Include="..\..\BonCtrl\ServiceFilter.h">
       <Filter>ヘッダー ファイル\BonCtrl</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\Common\IniUtil.h">
+      <Filter>ヘッダー ファイル\Common</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
@@ -158,8 +164,8 @@
     <ClCompile Include="..\..\Common\ParseTextInstances.cpp">
       <Filter>ソース ファイル\Common</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\BonCtrl\SendTCP.cpp">
-      <Filter>ソース ファイル\BonCtrl</Filter>
+    <ClCompile Include="..\..\Common\SendTSTCPDllUtil.cpp">
+      <Filter>ソース ファイル\Common</Filter>
     </ClCompile>
     <ClCompile Include="..\..\Common\TSBuffUtil.cpp">
       <Filter>ソース ファイル\Common</Filter>
@@ -170,11 +176,17 @@
     <ClCompile Include="..\..\BonCtrl\CreatePATPacket.cpp">
       <Filter>ソース ファイル\BonCtrl</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\BonCtrl\CreatePMTPacket.cpp">
+      <Filter>ソース ファイル\BonCtrl</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\BonCtrl\PMTUtil.cpp">
       <Filter>ソース ファイル\BonCtrl</Filter>
     </ClCompile>
     <ClCompile Include="..\..\BonCtrl\ServiceFilter.cpp">
       <Filter>ソース ファイル\BonCtrl</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\Common\IniUtil.cpp">
+      <Filter>ソース ファイル\Common</Filter>
     </ClCompile>
   </ItemGroup>
 </Project>

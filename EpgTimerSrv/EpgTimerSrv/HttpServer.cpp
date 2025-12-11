@@ -5,10 +5,12 @@
 #include "../../Common/PathUtil.h"
 #include "../../Common/ParseTextInstances.h"
 #include "civetweb.h"
+#include <fcntl.h>
 #ifdef _WIN32
 #include <io.h>
-#include <fcntl.h>
 #include <wincrypt.h>
+#else
+#include <sys/file.h>
 #endif
 
 namespace
@@ -21,9 +23,6 @@ const char UPNP_URN_AVT_1[] = "urn:schemas-upnp-org:service:AVTransport:1";
 
 CHttpServer::CHttpServer()
 	: mgContext(NULL)
-#ifndef EPGTIMERSRV_WITHLUA
-	, hLuaDll(NULL)
-#endif
 	, initedLibrary(false)
 {
 }
@@ -47,6 +46,17 @@ bool CHttpServer::StartServer(const SERVER_OPTIONS& op, const std::function<void
 		AddDebugLog(L"CHttpServer::StartServer(): path has unavailable chars.");
 		return false;
 	}
+#ifndef _MSC_VER
+	//Civetweb内部で64ビット整数の書式に%I64dが使われるが、特にMinGWではこの書式が利用可能かやや曖昧なので確かめる
+	LONGLONG llCheckSpec = 0;
+	char szCheckSpec[32];
+	if( _snprintf(szCheckSpec, sizeof(szCheckSpec), "%I64d", -12345678901) != 12 ||
+	    sscanf(szCheckSpec, "%I64d", &llCheckSpec) != 1 ||
+	    llCheckSpec != -12345678901 ){
+		AddDebugLog(L"CHttpServer::StartServer(): Environment error, check your compiler.");
+		return false;
+	}
+#endif
 #endif
 	string accessLogPath;
 	//ログは_wfopen()されるのでWtoUTF8()。civetweb.cのACCESS_LOG_FILEとERROR_LOG_FILEの扱いに注意
@@ -92,11 +102,22 @@ bool CHttpServer::StartServer(const SERVER_OPTIONS& op, const std::function<void
 	CParseContentTypeText contentType;
 	contentType.ParseText(GetCommonIniPath().replace_filename(L"ContentTypeText.txt").c_str());
 	wstring extraMimeW;
-	for( map<wstring, wstring>::const_iterator itr = contentType.GetMap().begin(); itr != contentType.GetMap().end(); itr++ ){
-		extraMimeW += itr->first + L'=' + itr->second + L',';
+	for( const auto& item : contentType.GetMap() ){
+		extraMimeW += item.first + L'=' + item.second + L',';
 	}
 	string extraMime;
 	WtoUTF8(extraMimeW, extraMime);
+
+	//"api"ディレクトリの特別扱いはドキュメントルートの直下にかぎる
+	string luaScriptPattern = "**.lua$|**.html$|";
+	for( size_t i = 0; i < rootPathU.size(); i++ ){
+		if( rootPathU[i] == '/' ){
+			luaScriptPattern += '/';
+		}else if( luaScriptPattern.back() != '*' ){
+			luaScriptPattern += '*';
+		}
+	}
+	luaScriptPattern += "/api/*$";
 
 	const char* options[64] = {
 		"ssi_pattern", "",
@@ -111,7 +132,7 @@ bool CHttpServer::StartServer(const SERVER_OPTIONS& op, const std::function<void
 		"ssl_default_verify_paths", "no",
 		"ssl_cipher_list", sslCipherList.c_str(),
 		"ssl_protocol_version", sslProtocolVersion,
-		"lua_script_pattern", "**.lua$|**.html$|*/api/*$",
+		"lua_script_pattern", luaScriptPattern.c_str(),
 		"access_control_allow_origin", "",
 	};
 	int opCount = 2 * 14;
@@ -142,15 +163,6 @@ bool CHttpServer::StartServer(const SERVER_OPTIONS& op, const std::function<void
 		options[opCount++] = globalAuthPath.c_str();
 	}
 
-#ifndef EPGTIMERSRV_WITHLUA
-	//LuaのDLLが無いとき分かりにくいタイミングでエラーになるので事前に読んでおく(必須ではない)
-	this->hLuaDll = LoadLibrary(GetModulePath().replace_filename(LUA_DLL_NAME).c_str());
-	if( this->hLuaDll == NULL ){
-		AddDebugLog(L"CHttpServer::StartServer(): " LUA_DLL_NAME L" not found.");
-		return false;
-	}
-#endif
-
 	unsigned int feat = MG_FEATURES_FILES + MG_FEATURES_IPV6 + MG_FEATURES_LUA + MG_FEATURES_CACHE +
 	                    (ports.find('s') != string::npos ? MG_FEATURES_TLS : 0);
 	this->initedLibrary = true;
@@ -172,7 +184,7 @@ bool CHttpServer::StartServer(const SERVER_OPTIONS& op, const std::function<void
 	if( op.enableSsdpServer ){
 		//"<UDN>uuid:{UUID}</UDN>"が必要
 		string notifyUuid;
-		std::unique_ptr<FILE, decltype(&fclose)> fp(UtilOpenFile(fs_path(op.rootPath).append(L"dlna").append(L"dms").append(L"ddd.xml"), UTIL_SECURE_READ), fclose);
+		std::unique_ptr<FILE, fclose_deleter> fp(UtilOpenFile(fs_path(op.rootPath).append(L"dlna").append(L"dms").append(L"ddd.xml"), UTIL_SECURE_READ));
 		if( fp ){
 			char olbuff[257];
 			for( size_t n = fread(olbuff, 1, 256, fp.get()); ; n = fread(olbuff + 64, 1, 192, fp.get()) + 64 ){
@@ -229,13 +241,13 @@ bool CHttpServer::StopServer(bool checkOnly)
 		}else{
 			//正常であればmg_stop()はreqToを超えて待機することはない
 			DWORD reqTo = atoi(mg_get_option(this->mgContext, "request_timeout_ms"));
-			DWORD tick = GetTickCount();
-			while( GetTickCount() - tick < reqTo + 10000 ){
+			DWORD tick = GetU32Tick();
+			while( GetU32Tick() - tick < reqTo + 10000 ){
 				if( mg_check_stop(this->mgContext) ){
 					this->mgContext = NULL;
 					break;
 				}
-				Sleep(10);
+				SleepForMsec(10);
 			}
 			if( this->mgContext ){
 				AddDebugLog(L"CHttpServer::StopServer(): failed to stop service.");
@@ -247,12 +259,6 @@ bool CHttpServer::StopServer(bool checkOnly)
 		mg_exit_library();
 		this->initedLibrary = false;
 	}
-#ifndef EPGTIMERSRV_WITHLUA
-	if( this->hLuaDll ){
-		FreeLibrary(this->hLuaDll);
-		this->hLuaDll = NULL;
-	}
-#endif
 	return true;
 }
 
@@ -283,32 +289,41 @@ CHttpServer::SERVER_OPTIONS CHttpServer::LoadServerOptions(LPCWSTR iniPath)
 	return op;
 }
 
-string CHttpServer::CreateRandom()
+string CHttpServer::CreateRandom(size_t len)
 {
-	char ret[65] = {};
+	string ret;
+	ret.reserve(len * 2);
 #ifdef _WIN32
 	HCRYPTPROV prov;
 	if( CryptAcquireContext(&prov, NULL, NULL, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT) ){
-		unsigned __int64 r[4] = {};
-		if( CryptGenRandom(prov, sizeof(r), (BYTE*)r) ){
-			sprintf_s(ret, "%016llx%016llx%016llx%016llx", r[0], r[1], r[2], r[3]);
+		ULONGLONG r = 0;
+		for( size_t i = 0; i < len && CryptGenRandom(prov, 8, (BYTE*)&r); i += 8 ){
+			char x[17];
+			sprintf_s(x, "%016llx", r);
+			ret.append(x, min<size_t>(len - i, 8) * 2);
 		}
 		CryptReleaseContext(prov, 0);
 	}
 #else
-	std::unique_ptr<FILE, decltype(&fclose)> fp(UtilOpenFile(fs_path(L"/dev/urandom"), UTIL_SHARED_READ), fclose);
+	std::unique_ptr<FILE, fclose_deleter> fp(UtilOpenFile(fs_path(L"/dev/urandom"), UTIL_SHARED_READ));
 	if( fp ){
-		unsigned long long r[4];
-		if( fread(r, 1, sizeof(r), fp.get()) == sizeof(r) ){
-			sprintf_s(ret, "%016llx%016llx%016llx%016llx", r[0], r[1], r[2], r[3]);
+		ULONGLONG r;
+		for( size_t i = 0; i < len && fread(&r, 1, 8, fp.get()) == 8; i += 8 ){
+			char x[17];
+			sprintf_s(x, "%016llx", r);
+			ret.append(x, min<size_t>(len - i, 8) * 2);
 		}
 	}
 #endif
+	if( ret.size() < len * 2 ){
+		ret.clear();
+	}
 	return ret;
 }
 
-void CHttpServer::InitLua(const mg_connection* conn, void* luaContext)
+void CHttpServer::InitLua(const mg_connection* conn, void* luaContext, unsigned int contextFlags)
 {
+	(void)contextFlags;
 	const CHttpServer* sys = (CHttpServer*)mg_get_user_data(mg_get_context(conn));
 	lua_State* L = (lua_State*)luaContext;
 	sys->initLuaProc(L);
@@ -332,7 +347,7 @@ void reg_int_(lua_State* L, const char* name, size_t size, int val)
 	lua_rawset(L, -3);
 }
 
-void reg_int64_(lua_State* L, const char* name, size_t size, __int64 val)
+void reg_number_(lua_State* L, const char* name, size_t size, double val)
 {
 	lua_pushlstring(L, name, size - 1);
 	lua_pushnumber(L, (lua_Number)val);
@@ -388,13 +403,13 @@ int get_int(lua_State* L, const char* name)
 	return ret;
 }
 
-__int64 get_int64(lua_State* L, const char* name)
+LONGLONG get_int64(lua_State* L, const char* name)
 {
 	lua_getfield(L, -1, name);
 	lua_Number ret = lua_tonumber(L, -1);
 	lua_pop(L, 1);
 	//整数を正しく表現できない範囲の値は制限する
-	return (__int64)min(max(ret, -1e+16), 1e+16);
+	return (LONGLONG)min(max(ret, -1e+16), 1e+16);
 }
 
 bool get_boolean(lua_State* L, const char* name)
@@ -418,7 +433,7 @@ SYSTEMTIME get_time(lua_State* L, const char* name)
 		st.wMinute = (WORD)get_int(L, "min");
 		st.wSecond = (WORD)get_int(L, "sec");
 		st.wMilliseconds = (WORD)get_int(L, "msec");
-		__int64 t = ConvertI64Time(st);
+		LONGLONG t = ConvertI64Time(st);
 		if( t != 0 && ConvertSystemTime(t, &st) ){
 			ret = st;
 		}
@@ -431,7 +446,7 @@ SYSTEMTIME get_time(lua_State* L, const char* name)
 namespace
 {
 
-wchar_t* utf8towcsdup(const char* s, const wchar_t* prefix = L"")
+wchar_t* utf8towcsdup(const char* s, const wchar_t* prefix = L"", const wchar_t* suffix = L"")
 {
 	wstring w;
 	try{
@@ -442,12 +457,73 @@ wchar_t* utf8towcsdup(const char* s, const wchar_t* prefix = L"")
 			return NULL;
 		}
 		w.insert(0, prefix);
+		w.append(suffix);
 	}catch(...){
 		return NULL;
 	}
 	wchar_t* ret = (wchar_t*)malloc((w.size() + 1) * sizeof(wchar_t));
 	if( ret ){
 		wcscpy_s(ret, w.size() + 1, w.c_str());
+	}
+	return ret;
+}
+
+wchar_t* allocenv(lua_State* L, int idx)
+{
+	wstring wenv;
+	LPWCH env = GetEnvironmentStrings();
+	if( env ){
+		size_t n = 0;
+		while( env[n] ){
+			n += wcslen(env + n) + 1;
+		}
+		try{
+			wenv.assign(env, env + n);
+		}catch(...){
+			FreeEnvironmentStrings(env);
+			return NULL;
+		}
+		FreeEnvironmentStrings(env);
+	}
+	lua_pushnil(L);
+	while( lua_next(L, idx) ){
+		if( lua_type(L, -2) == LUA_TSTRING ){
+			try{
+				wstring var;
+				UTF8toW(lua_tostring(L, -2), var);
+				if( var.find(L'=') == wstring::npos ){
+					for( size_t n = 0; n < wenv.size(); ){
+						size_t m = wenv.find(L'\0', n);
+						if( m - n > var.size() && wenv[n + var.size()] == L'=' ){
+							wenv[n + var.size()] = L'\0';
+							if( CompareNoCase(var, wenv.c_str() + n) == 0 ){
+								//erase an old variable
+								wenv.erase(n, m + 1 - n);
+							}else{
+								wenv[n + var.size()] = L'=';
+								n = m + 1;
+							}
+						}else{
+							n = m + 1;
+						}
+					}
+					if( lua_type(L, -1) == LUA_TSTRING ){
+						//append a new variable
+						wstring val;
+						UTF8toW(lua_tostring(L, -1), val);
+						wenv += var + L'=' + val + L'\0';
+					}
+				}
+			}catch(...){
+				lua_pop(L, 2);
+				return NULL;
+			}
+		}
+		lua_pop(L, 1);
+	}
+	wchar_t* ret = (wchar_t*)malloc((wenv.size() + 1) * sizeof(wchar_t));
+	if( ret ){
+		std::copy(wenv.c_str(), wenv.c_str() + wenv.size() + 1, ret);
 	}
 	return ret;
 }
@@ -646,13 +722,13 @@ int f_seek(lua_State* L)
 	FILE* f = tofile(L);
 	int op = luaL_checkoption(L, 2, "cur", modenames);
 	lua_Number p3 = luaL_optnumber(L, 3, 0);
-	__int64 offset = (__int64)p3;
+	LONGLONG offset = (LONGLONG)p3;
 	luaL_argcheck(L, (lua_Number)offset == p3, 3, "not an integer in proper range");
-	op = _fseeki64(f, offset, mode[op]);
+	op = my_fseek(f, offset, mode[op]);
 	if( op )
 		return luaL_fileresult(L, 0, NULL); //error
 	else{
-		lua_pushnumber(L, (lua_Number)_ftelli64(f));
+		lua_pushnumber(L, (lua_Number)my_ftell(f));
 		return 1;
 	}
 }
@@ -686,14 +762,17 @@ int os_execute(lua_State* L)
 	}
 	const char* cmd = luaL_optstring(L, 1, NULL);
 	if( cmd != NULL ){
-		DWORD creflags = lua_toboolean(L, 2) ? 0 : CREATE_NO_WINDOW;
+		//EXTENDED!: show/hide console window
+		DWORD creflags = CREATE_UNICODE_ENVIRONMENT | (lua_toboolean(L, 2) ? 0 : CREATE_NO_WINDOW);
 		wchar_t* wcmd = utf8towcsdup(cmd, L" /c ");
 		luaL_argcheck(L, wcmd != NULL, 1, "utf8towcsdup");
+		//EXTENDED!: override environment
+		wchar_t* wenv = lua_istable(L, 3) ? allocenv(L, 3) : NULL;
 		STARTUPINFO si = {};
 		si.cb = sizeof(si);
 		PROCESS_INFORMATION pi;
 		int stat = -1;
-		if( cmdexe[0] && CreateProcess(cmdexe, wcmd, NULL, NULL, FALSE, creflags, NULL, NULL, &si, &pi) ){
+		if( cmdexe[0] && CreateProcess(cmdexe, wcmd, NULL, NULL, FALSE, creflags, wenv, NULL, &si, &pi) ){
 			CloseHandle(pi.hThread);
 			if( WaitForSingleObject(pi.hProcess, INFINITE) == WAIT_OBJECT_0 && GetExitCodeProcess(pi.hProcess, &dw) ){
 				stat = (int)dw;
@@ -701,6 +780,7 @@ int os_execute(lua_State* L)
 			CloseHandle(pi.hProcess);
 		}
 		errno = ENOENT;
+		nefree(wenv);
 		nefree(wcmd);
 		return luaL_execresult(L, stat);
 	}else{
@@ -748,7 +828,7 @@ int io_open(lua_State* L)
 	luaL_argcheck(L, checkmode(mode), 2, "invalid mode");
 	wchar_t* wfilename = utf8towcsdup(filename);
 	luaL_argcheck(L, wfilename != NULL, 1, "utf8towcsdup");
-	wchar_t* wmode = utf8towcsdup(mode);
+	wchar_t* wmode = utf8towcsdup(mode, L"", L"N");
 	if( wmode == NULL ){
 		free(wfilename);
 		luaL_argerror(L, 2, "utf8towcsdup");
@@ -777,7 +857,9 @@ int io_popen(lua_State* L)
 {
 	const char* filename = luaL_checkstring(L, 1);
 	const char* mode = luaL_optstring(L, 2, "r");
-	DWORD creflags = lua_toboolean(L, 3) ? 0 : CREATE_NO_WINDOW;
+	//EXTENDED!: show/hide console window
+	DWORD creflags = CREATE_UNICODE_ENVIRONMENT | (lua_toboolean(L, 3) ? 0 : CREATE_NO_WINDOW);
+	int nargs = lua_gettop(L);
 	LStream* p = newprefile(L);
 	luaL_argcheck(L, (mode[0] == 'r' || mode[0] == 'w') && (!mode[1] || mode[1] == 'b' && !mode[2]), 2, "invalid mode");
 	wchar_t* wfilename = utf8towcsdup(filename, L" /c ");
@@ -788,6 +870,8 @@ int io_popen(lua_State* L)
 	if( dw == 0 || dw >= MAX_PATH ){
 		cmdexe[0] = L'\0';
 	}
+	//EXTENDED!: override environment
+	wchar_t* wenv = nargs >= 4 && lua_istable(L, 4) ? allocenv(L, 4) : NULL;
 	HANDLE ppipe = INVALID_HANDLE_VALUE; //parent
 	HANDLE tpipe = INVALID_HANDLE_VALUE; //temporary
 	if( cmdexe[0] && CreatePipe(mode[0] == 'r' ? &ppipe : &tpipe, mode[0] == 'r' ? &tpipe : &ppipe, NULL, 0) ){
@@ -810,7 +894,7 @@ int io_popen(lua_State* L)
 			}
 			si.hStdError = CreateFile(L"nul", GENERIC_WRITE, 0, &sa, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 			PROCESS_INFORMATION pi;
-			b = CreateProcess(cmdexe, wfilename, NULL, NULL, TRUE, creflags, NULL, NULL, &si, &pi);
+			b = CreateProcess(cmdexe, wfilename, NULL, NULL, TRUE, creflags, wenv, NULL, &si, &pi);
 			if( si.hStdError != INVALID_HANDLE_VALUE ){
 				CloseHandle(si.hStdError);
 			}
@@ -842,6 +926,7 @@ int io_popen(lua_State* L)
 		}
 	}
 	errno = ENOENT;
+	nefree(wenv);
 	nefree(wfilename);
 	p->closef = &f_pclose;
 	return (p->f == NULL) ? luaL_fileresult(L, 0, filename) : 1;
@@ -865,6 +950,31 @@ void f_createmeta(lua_State* L)
 	lua_setfield(L, -2, "__index"); //metatable.__index = metatable
 	luaL_setfuncs(L, flib, 0); //add file methods to new metatable
 	lua_pop(L, 1); //pop new metatable
+}
+#else
+int io_cloexec(lua_State* L)
+{
+	luaL_Stream* p = (luaL_Stream*)luaL_checkudata(L, 1, LUA_FILEHANDLE);
+	if( p->f ){
+		int flags = fcntl(fileno(p->f), F_GETFD);
+		if( flags != -1 && fcntl(fileno(p->f), F_SETFD, flags | FD_CLOEXEC) != -1 ){
+			return 0;
+		}
+	}
+	return luaL_error(L, "fcntl");
+}
+
+int io_flock_nb(lua_State* L)
+{
+	luaL_Stream* p = (luaL_Stream*)luaL_checkudata(L, 1, LUA_FILEHANDLE);
+	const char* mode = luaL_optstring(L, 2, "x");
+	luaL_argcheck(L, (*mode && !mode[1] && strchr("sux", *mode)), 2, "invalid mode");
+	if( p->f ){
+		int ret = flock(fileno(p->f), LOCK_NB | (*mode == 's' ? LOCK_SH : *mode == 'u' ? LOCK_UN : LOCK_EX));
+		lua_pushboolean(L, ret == 0);
+		return 1;
+	}
+	return luaL_error(L, "flock");
 }
 #endif
 

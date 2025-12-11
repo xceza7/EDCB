@@ -4,9 +4,15 @@
 #include "ReserveManager.h"
 #include "NotifyManager.h"
 #include "HttpServer.h"
+#include "../../Common/CtrlCmdUtil.h"
+#include "../../Common/MessageManager.h"
 #include "../../Common/ParseTextInstances.h"
 #include "../../Common/TimeShiftUtil.h"
 #include "../../Common/InstanceManager.h"
+
+#ifdef _WIN32
+#define LUA_DLL_NAME L"lua52.dll"
+#endif
 
 //各種サーバと自動予約の管理をおこなう
 //必ずオブジェクト生成→Main()→…→破棄の順番で利用しなければならない
@@ -14,8 +20,6 @@ class CEpgTimerSrvMain
 {
 public:
 	CEpgTimerSrvMain();
-	//メインループ処理(Taskモード)
-	static bool TaskMain();
 	//メインループ処理
 	//serviceFlag_: サービスとしての起動かどうか
 	bool Main(bool serviceFlag_);
@@ -24,8 +28,8 @@ public:
 	//休止／スタンバイに移行して構わない状況かどうか
 	bool IsSuspendOK() const;
 private:
-	//メインウィンドウ(Taskモード)
-	static LRESULT CALLBACK TaskMainWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+	static bool OnMessage(CMessageManager::PARAMS& pa);
+#ifdef _WIN32
 	//メインウィンドウ
 	static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 	//シャットダウン問い合わせダイアログ
@@ -36,14 +40,18 @@ private:
 	static void OpenGUI();
 	//「予約削除」ポップアップを作成する
 	static void InitReserveMenuPopup(HMENU hMenu, vector<RESERVE_DATA>& list);
+	//「配信停止」ポップアップを作成する
+	void InitStreamingMenuPopup(HMENU hMenu) const;
+#endif
 	void ReloadNetworkSetting();
 	void ReloadSetting(bool initialize = false);
 	//デフォルト指定可能なフィールドのデフォルト値を特別な予約情報(ID=0x7FFFFFFF)として取得する
-	RESERVE_DATA GetDefaultReserveData(__int64 startTime) const;
+	RESERVE_DATA GetDefaultReserveData(LONGLONG startTime) const;
 	//REC_SETTING_DATA::recModeの値域を調整する
 	void AdjustRecModeRange(REC_SETTING_DATA& recSetting) const;
+#ifdef _WIN32
 	//現在の予約状態に応じた復帰タイマをセットする
-	bool SetResumeTimer(HANDLE* resumeTimer, __int64* resumeTime, DWORD marginSec);
+	bool SetResumeTimer(HANDLE* resumeTimer, LONGLONG* resumeTime, DWORD marginSec);
 	//システムをシャットダウンする
 	static void SetShutdown(BYTE shutdownMode);
 	//GUIにシャットダウン可能かどうかの問い合わせを開始させる
@@ -56,15 +64,21 @@ private:
 	bool IsFindShareTSFile() const;
 	//抑制条件のプロセスが起動しているかどうか
 	bool IsFindNoSuspendExe() const;
+#endif
 	//変更直前の予約を調整する
 	vector<RESERVE_DATA>& PreChgReserveData(vector<RESERVE_DATA>& reserveList) const;
 	void AutoAddReserveEPG(const EPG_AUTO_ADD_DATA& data, vector<RESERVE_DATA>& setList);
 	void AutoAddReserveProgram(const MANUAL_AUTO_ADD_DATA& data, vector<RESERVE_DATA>& setList) const;
 	//外部制御コマンド関係
-	static void CtrlCmdCallback(CEpgTimerSrvMain* sys, CMD_STREAM* cmdParam, CMD_STREAM* resParam, bool tcpFlag, LPCWSTR clientIP);
-	bool CtrlCmdProcessCompatible(CMD_STREAM& cmdParam, CMD_STREAM& resParam, LPCWSTR clientIP);
+	static void CtrlCmdCallback(CEpgTimerSrvMain* sys, const CCmdStream& cmd, CCmdStream& res, int threadIndex, bool tcpFlag, LPCWSTR clientIP);
+	bool CtrlCmdProcessCompatible(const CCmdStream& cmd, CCmdStream& res, LPCWSTR clientIP);
 	void InitLuaCallback(lua_State* L, LPCSTR serverRandom);
 	void DoLuaBat(CBatManager::BAT_WORK_INFO& work, vector<char>& buff);
+#ifdef _WIN32
+	static void DoLuaWorker(CEpgTimerSrvMain* sys);
+#else
+	static void ProcessLuaPost(CEpgTimerSrvMain* sys);
+#endif
 	//Lua-edcb空間のコールバック
 	class CLuaWorkspace
 	{
@@ -77,10 +91,12 @@ private:
 	private:
 		vector<char> strOut;
 	};
+	static int LuaCreateRandom(lua_State* L);
 	static int LuaGetGenreName(lua_State* L);
 	static int LuaGetComponentTypeName(lua_State* L);
 	static int LuaSleep(lua_State* L);
 	static int LuaConvert(lua_State* L);
+	static void RedirectRelativeIniPath(wstring& path);
 	static int LuaGetPrivateProfile(lua_State* L);
 	static int LuaWritePrivateProfile(lua_State* L);
 	static int LuaReloadEpg(lua_State* L);
@@ -109,6 +125,7 @@ private:
 	static int LuaChgProtectRecFileInfo(lua_State* L);
 	static int LuaDelRecFileInfo(lua_State* L);
 	static int LuaGetTunerReserveAll(lua_State* L);
+	static int LuaGetTunerProcessStatusAll(lua_State* L);
 	static int LuaEnumAutoAdd(lua_State* L);
 	static int LuaEnumManuAdd(lua_State* L);
 	static int LuaDelAutoAdd(lua_State* L);
@@ -141,9 +158,9 @@ private:
 	//autoAddLock->settingLockの順にロックする
 	mutable recursive_mutex_ autoAddLock;
 	mutable recursive_mutex_ settingLock;
-	HWND hwndMain;
-#ifndef EPGTIMERSRV_WITHLUA
-	HMODULE hLuaDll;
+	CMessageManager msgManager;
+#ifdef _WIN32
+	std::unique_ptr<void, void(*)(void*)> luaDllHolder;
 #endif
 	atomic_bool_ stoppingFlag;
 
@@ -155,10 +172,22 @@ private:
 	wstring tcpAccessControlList;
 	CHttpServer::SERVER_OPTIONS httpOptions;
 	string httpServerRandom;
+#ifdef _WIN32
 	atomic_bool_ useSyoboi;
+#endif
 	bool nwtvUdp;
 	bool nwtvTcp;
 	DWORD compatFlags;
 
-	vector<EPGDB_EVENT_INFO> oldSearchList[2];
+#ifdef _WIN32
+	thread_ doLuaWorkerThread;
+	recursive_mutex_ doLuaWorkerLock;
+	vector<string> doLuaScriptQueue;
+#else
+	thread_ processLuaPostThread;
+	CAutoResetEvent processLuaPostStopEvent;
+#endif
+
+	//CPipeServer用に2つとCTCPServer用に1つ
+	vector<EPGDB_EVENT_INFO> oldSearchList[3];
 };

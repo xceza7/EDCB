@@ -2,6 +2,7 @@
 #include "DecodeUtil.h"
 
 #include "../../Common/StringUtil.h"
+#include "../../Common/TimeUtil.h"
 #include "ARIB8CharDecode.h"
 #include "../../Common/EpgTimerUtil.h"
 
@@ -280,7 +281,7 @@ void CDecodeUtil::AddTSData(BYTE* data, DWORD size)
 				lower_bound_first(this->buffUtilMap.begin(), this->buffUtilMap.end(), tsPacket.PID);
 			if( itr == this->buffUtilMap.end() || itr->first != tsPacket.PID ){
 				//まだPIDがないので新規
-				itr = this->buffUtilMap.insert(itr, std::make_pair(tsPacket.PID, CTSBuffUtil()));
+				itr = this->buffUtilMap.emplace(itr, tsPacket.PID, CTSBuffUtil());
 			}
 			if( itr->second.Add188TS(tsPacket) == TRUE ){
 				BYTE* section = NULL;
@@ -418,6 +419,7 @@ void CDecodeUtil::CheckPMT(const Desc::CDescriptor& pmt)
 
 void CDecodeUtil::CheckDsmcc(WORD PID, const Desc::CDescriptor& dsmccHead, const BYTE* data, size_t dataSize)
 {
+	(void)dsmccHead;
 	if( dataSize < 12 ){
 		return;
 	}
@@ -486,7 +488,7 @@ void CDecodeUtil::CheckDsmccDII(WORD PID, const BYTE* body, size_t bodySize)
 					std::find_if(this->downloadModuleList.begin(), this->downloadModuleList.end(),
 					             [=](const DOWNLOAD_MODULE_DATA& a) { return a.name == moduleName; });
 				if( itr == this->downloadModuleList.end() ){
-					this->downloadModuleList.resize(this->downloadModuleList.size() + 1);
+					this->downloadModuleList.emplace_back();
 					itr = this->downloadModuleList.end() - 1;
 					itr->name = moduleName;
 				}
@@ -519,31 +521,31 @@ void CDecodeUtil::CheckDsmccDDB(WORD PID, DWORD downloadID, const BYTE* body, si
 	WORD moduleID = body[0] << 8 | body[1];
 	BYTE moduleVersion = body[2];
 	size_t blockNumber = body[4] << 8 | body[5];
-	for( vector<DOWNLOAD_MODULE_DATA>::iterator itr = this->downloadModuleList.begin(); itr != this->downloadModuleList.end(); itr++ ){
-		if( itr->downloadID == downloadID &&
-		    itr->pid == PID &&
-		    itr->moduleID == moduleID &&
-		    itr->moduleVersion == moduleVersion &&
-		    itr->blockGetList.size() > blockNumber &&
-		    itr->blockGetList[blockNumber] == 0 ){
+	for( DOWNLOAD_MODULE_DATA& dl : this->downloadModuleList ){
+		if( dl.downloadID == downloadID &&
+		    dl.pid == PID &&
+		    dl.moduleID == moduleID &&
+		    dl.moduleVersion == moduleVersion &&
+		    dl.blockGetList.size() > blockNumber &&
+		    dl.blockGetList[blockNumber] == 0 ){
 			//ブロック取得
 			size_t blockSize = bodySize - 6;
-			if( blockNumber == itr->blockGetList.size() - 1 ){
+			if( blockNumber == dl.blockGetList.size() - 1 ){
 				//最終ブロック
-				if( itr->moduleData.size() >= blockSize ){
-					std::copy(body + 6, body + bodySize, itr->moduleData.end() - blockSize);
-					itr->blockGetList[blockNumber] = 1;
+				if( dl.moduleData.size() >= blockSize ){
+					std::copy(body + 6, body + bodySize, dl.moduleData.end() - blockSize);
+					dl.blockGetList[blockNumber] = 1;
 				}
 			}else{
 				//最終ブロック以外
-				if( itr->moduleData.size() >= blockSize * blockNumber + blockSize ){
-					std::copy(body + 6, body + bodySize, itr->moduleData.begin() + blockSize * blockNumber);
-					itr->blockGetList[blockNumber] = 1;
+				if( dl.moduleData.size() >= blockSize * blockNumber + blockSize ){
+					std::copy(body + 6, body + bodySize, dl.moduleData.begin() + blockSize * blockNumber);
+					dl.blockGetList[blockNumber] = 1;
 				}
 			}
-			if( std::find(itr->blockGetList.begin(), itr->blockGetList.end(), 0) == itr->blockGetList.end() ){
+			if( std::find(dl.blockGetList.begin(), dl.blockGetList.end(), 0) == dl.blockGetList.end() ){
 				//すべて取得した
-				CheckDownloadedModule(*itr);
+				CheckDownloadedModule(dl);
 			}
 		}
 	}
@@ -665,7 +667,7 @@ void CDecodeUtil::UpdateEngineeringPmtMap()
 									if( engList.back() != 0 ){
 										auto jtr = lower_bound_first(this->engineeringPmtMap.begin(), this->engineeringPmtMap.end(), engList.back());
 										if( jtr == this->engineeringPmtMap.end() || jtr->first != engList.back() ){
-											this->engineeringPmtMap.insert(jtr, std::make_pair(engList.back(), std::unique_ptr<const Desc::CDescriptor>()));
+											this->engineeringPmtMap.emplace(jtr, engList.back(), std::unique_ptr<const Desc::CDescriptor>());
 										}
 									}
 								}
@@ -730,21 +732,21 @@ void CDecodeUtil::CheckSDT(WORD PID, const Desc::CDescriptor& sdt)
 
 void CDecodeUtil::CheckTDT(const Desc::CDescriptor& tdt)
 {
-	__int64 time = MJDtoI64Time(tdt.GetNumber(Desc::jst_time_mjd), tdt.GetNumber(Desc::jst_time_bcd));
+	LONGLONG time = MJDtoI64Time(tdt.GetNumber(Desc::jst_time_mjd), tdt.GetNumber(Desc::jst_time_bcd));
 	if( tdt.GetNumber(Desc::table_id) == 0x73 ){
 		//TOT
 		this->totTime = time;
-		this->totTimeTick = GetTickCount();
+		this->totTimeTick = GetU32Tick();
 	}else{
 		this->tdtTime = time;
-		this->tdtTimeTick = GetTickCount();
+		this->tdtTimeTick = GetU32Tick();
 	}
 }
 
 void CDecodeUtil::CheckEIT(WORD PID, const Desc::CDescriptor& eit)
 {
 	if( epgDBUtil != NULL ){
-		__int64 time = 0;
+		LONGLONG time = 0;
 		GetNowTime(&time);
 		epgDBUtil->AddEIT(PID, eit, time);
 	}
@@ -778,7 +780,7 @@ void CDecodeUtil::CheckSIT(const Desc::CDescriptor& sit)
 			if( sit.GetNumber(Desc::descriptor_tag, lp) == Desc::partialTS_time_descriptor ){
 				if( sit.GetNumber(Desc::jst_time_flag, lp) == 1 ){
 					this->sitTime = MJDtoI64Time(sit.GetNumber(Desc::jst_time_mjd), sit.GetNumber(Desc::jst_time_bcd));
-					this->sitTimeTick = GetTickCount();
+					this->sitTimeTick = GetU32Tick();
 				}
 			}
 		}while( sit.NextLoopIndex(lp) );
@@ -831,7 +833,7 @@ void CDecodeUtil::UpdateLogoData(WORD onid, WORD id, BYTE type, const BYTE* logo
 		LONGLONG key = (LONGLONG)onid << 32 | (LONGLONG)id << 16 | type;
 		vector<LOGO_DATA>::iterator itr = lower_bound_first(this->logoMap.begin(), this->logoMap.end(), key);
 		if( itr == this->logoMap.end() || itr->first != key ){
-			itr = this->logoMap.insert(itr, LOGO_DATA());
+			itr = this->logoMap.emplace(itr);
 			itr->first = key;
 			bool insertPalette = false;
 			if( logo[25] == 3 ){
@@ -961,7 +963,8 @@ void CDecodeUtil::SetLogoTypeFlags(
 						//DSM-CC type D (データカルーセル)
 						do{
 							if( itr->second->GetNumber(Desc::descriptor_tag, lp2) == Desc::stream_identifier_descriptor ){
-								if( itr->second->GetNumber(Desc::component_tag, lp2) == 0x79 ){
+								DWORD tag = itr->second->GetNumber(Desc::component_tag, lp2);
+								if( tag == 0x79 || tag == 0x7A ){
 									//TR-B15 全受信機共通データ
 									this->additionalNeededPidList.push_back((WORD)itr->second->GetNumber(Desc::elementary_PID, lp));
 								}
@@ -980,25 +983,25 @@ void CDecodeUtil::SetLogoTypeFlags(
 
 //全ロゴを列挙する
 BOOL CDecodeUtil::EnumLogoList(
-	BOOL (CALLBACK *enumLogoListProc)(DWORD, const LOGO_INFO*, LPVOID),
-	LPVOID param
+	BOOL (CALLBACK *enumLogoListProc)(DWORD, const LOGO_INFO*, void*),
+	void* param
 	)
 {
 	if( this->logoMap.empty() ){
 		return FALSE;
 	}
 	if( enumLogoListProc((DWORD)this->logoMap.size(), NULL, param) ){
-		for( vector<LOGO_DATA>::const_iterator itr = this->logoMap.begin(); itr != this->logoMap.end(); itr++ ){
+		for( const LOGO_DATA& logo : this->logoMap ){
 			LOGO_INFO info;
-			info.onid = (WORD)(itr->first >> 32);
-			info.id = (WORD)(itr->first >> 16);
-			info.type = (BYTE)itr->first;
+			info.onid = (WORD)(logo.first >> 32);
+			info.id = (WORD)(logo.first >> 16);
+			info.type = (BYTE)logo.first;
 			info.bReserved = 0;
 			info.wReserved = 0;
-			info.dataSize = (DWORD)itr->data.size();
-			info.serviceListSize = (DWORD)itr->serviceList.size();
-			info.data = itr->data.data();
-			info.serviceList = itr->serviceList.data();
+			info.dataSize = (DWORD)logo.data.size();
+			info.serviceListSize = (DWORD)logo.serviceList.size();
+			info.data = logo.data.data();
+			info.serviceList = logo.serviceList.data();
 			if( enumLogoListProc(1, &info, param) == FALSE ){
 				break;
 			}
@@ -1008,7 +1011,7 @@ BOOL CDecodeUtil::EnumLogoList(
 }
 
 //解析データの現在のストリームＩＤを取得する
-// originalNetworkID		[OUT]現在のoriginalNetworkID
+// originalNetworkID		[OUT]現在のoriginalNetworkID。NULL可
 // transportStreamID		[OUT]現在のtransportStreamID
 BOOL CDecodeUtil::GetTSID(
 	WORD* originalNetworkID,
@@ -1016,15 +1019,20 @@ BOOL CDecodeUtil::GetTSID(
 	)
 {
 	if( this->sdtActualInfo.empty() == false ){
-		*originalNetworkID = (WORD)this->sdtActualInfo.begin()->second.GetNumber(Desc::original_network_id);
+		if( originalNetworkID ){
+			*originalNetworkID = (WORD)this->sdtActualInfo.begin()->second.GetNumber(Desc::original_network_id);
+		}
 		*transportStreamID = (WORD)this->sdtActualInfo.begin()->second.GetNumber(Desc::transport_stream_id);
 		return TRUE;
-	}else if( this->sitInfo != NULL && this->patInfo != NULL ){
+	}else if( this->patInfo ){
 		//TSID
 		*transportStreamID = (WORD)this->patInfo->GetNumber(Desc::transport_stream_id);
 		//ONID
+		if( originalNetworkID == NULL ){
+			return TRUE;
+		}
 		Desc::CDescriptor::CLoopPointer lp;
-		if( this->sitInfo->EnterLoop(lp) ){
+		if( this->sitInfo && this->sitInfo->EnterLoop(lp) ){
 			do{
 				if( this->sitInfo->GetNumber(Desc::descriptor_tag, lp) == Desc::network_identification_descriptor ){
 					*originalNetworkID = (WORD)this->sitInfo->GetNumber(Desc::network_id, lp);
@@ -1066,8 +1074,8 @@ BOOL CDecodeUtil::GetServiceListActual(
 	this->serviceAdapterList.reset(new CServiceInfoAdapter[*serviceListSize]);
 
 
-	wstring network_nameW = L"";
-	wstring ts_nameW = L"";
+	wstring network_nameW;
+	wstring ts_nameW;
 	BYTE remote_control_key_id = 0;
 	vector<WORD> partialServiceList;
 
@@ -1262,7 +1270,7 @@ BOOL CDecodeUtil::GetServiceListSIT(
 // time				[OUT]ストリーム内の現在の時間
 // tick				[OUT]timeを取得した時点のチックカウント
 BOOL CDecodeUtil::GetNowTime(
-	__int64* time,
+	LONGLONG* time,
 	DWORD* tick
 	)
 {

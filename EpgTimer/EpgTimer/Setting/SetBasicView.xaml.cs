@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
 using System.Collections.ObjectModel;
@@ -31,6 +32,11 @@ namespace EpgTimer.Setting
                 textBox_exe.SetReadOnlyWithEffect(true);
                 button_exe.IsEnabled = true;
                 textBox_cmdBon.SetReadOnlyWithEffect(true);
+                textBox_cmdMin.SetReadOnlyWithEffect(true);
+                textBox_cmdViewOff.SetReadOnlyWithEffect(true);
+                textBox_cmdOnid.SetReadOnlyWithEffect(true);
+                textBox_cmdTsid.SetReadOnlyWithEffect(true);
+                textBox_cmdSid.SetReadOnlyWithEffect(true);
                 label_recFolder.ToolTip = "未設定の場合は(EpgTimerSrv側の)「設定関係保存フォルダ」がデフォルトになります";
                 listBox_recFolder.IsEnabled = true;
                 textBox_recFolder.SetReadOnlyWithEffect(true);
@@ -71,6 +77,10 @@ namespace EpgTimer.Setting
             bxr.TargetBox.SelectionChanged += ViewUtil.ListBox_TextBoxSyncSelectionChanged(bxr.TargetBox, textBox_recFolder);
             bxr.TargetBox.KeyDown += ViewUtil.KeyDown_Enter(button_rec_open);
             bxr.targetBoxAllowDoubleClick(bxr.TargetBox, (sender, e) => button_rec_open.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)));
+
+            // バージョン文字列を表示
+            stackpanel_versionInfo.Visibility = App.VERSION_TEXT == "" ? Visibility.Hidden : Visibility.Visible;
+            textBlock_versionText.Text = ((AssemblyInformationalVersionAttribute)Attribute.GetCustomAttribute(Assembly.GetEntryAssembly(), typeof(AssemblyInformationalVersionAttribute))).InformationalVersion;
 
             if (CommonManager.Instance.NWMode == false)
             {
@@ -128,6 +138,9 @@ namespace EpgTimer.Setting
             textBox_cmdBon.Text = IniFileHandler.GetPrivateProfileString("APP_CMD_OPT", "Bon", "-d", SettingPath.ViewAppIniPath);
             textBox_cmdMin.Text = IniFileHandler.GetPrivateProfileString("APP_CMD_OPT", "Min", "-min", SettingPath.ViewAppIniPath);
             textBox_cmdViewOff.Text = IniFileHandler.GetPrivateProfileString("APP_CMD_OPT", "ViewOff", "-noview", SettingPath.ViewAppIniPath);
+            textBox_cmdOnid.Text = IniFileHandler.GetPrivateProfileString("APP_CMD_OPT", "ONID", "-nid", SettingPath.ViewAppIniPath);
+            textBox_cmdTsid.Text = IniFileHandler.GetPrivateProfileString("APP_CMD_OPT", "TSID", "-tsid", SettingPath.ViewAppIniPath);
+            textBox_cmdSid.Text = IniFileHandler.GetPrivateProfileString("APP_CMD_OPT", "SID", "-sid", SettingPath.ViewAppIniPath);
 
             listBox_recFolder.Items.Clear();
             listBox_recFolder.Items.AddItems(settings.DefRecFolders);
@@ -231,6 +244,18 @@ namespace EpgTimer.Setting
             {
                 IniFileHandler.WritePrivateProfileString("APP_CMD_OPT", "ViewOff", textBox_cmdViewOff.Text, SettingPath.ViewAppIniPath);
             }
+            if (IniFileHandler.GetPrivateProfileString("APP_CMD_OPT", "ONID", "-nid", SettingPath.ViewAppIniPath) != textBox_cmdOnid.Text)
+            {
+                IniFileHandler.WritePrivateProfileString("APP_CMD_OPT", "ONID", textBox_cmdOnid.Text, SettingPath.ViewAppIniPath);
+            }
+            if (IniFileHandler.GetPrivateProfileString("APP_CMD_OPT", "TSID", "-sid", SettingPath.ViewAppIniPath) != textBox_cmdTsid.Text)
+            {
+                IniFileHandler.WritePrivateProfileString("APP_CMD_OPT", "TSID", textBox_cmdTsid.Text, SettingPath.ViewAppIniPath);
+            }
+            if (IniFileHandler.GetPrivateProfileString("APP_CMD_OPT", "SID", "-sid", SettingPath.ViewAppIniPath) != textBox_cmdSid.Text)
+            {
+                IniFileHandler.WritePrivateProfileString("APP_CMD_OPT", "SID", textBox_cmdSid.Text, SettingPath.ViewAppIniPath);
+            }
 
             settings.DefRecFolders = ViewUtil.GetFolderList(listBox_recFolder);
             IniFileHandler.WritePrivateProfileString("SET", "RecInfoFolder", SettingPath.CheckFolder(textBox_recInfoFolder.Text), "", SettingPath.CommonIniPath);
@@ -312,7 +337,7 @@ namespace EpgTimer.Setting
                 {
                     int hh = comboBox_HH.SelectedIndex;
                     int mm = comboBox_MM.SelectedIndex;
-                    String time = hh.ToString("D2") + ":" + mm.ToString("D2");
+                    string time = hh.ToString("D2") + ":" + mm.ToString("D2");
                     int wday = comboBox_wday.SelectedIndex;
                     if (1 <= wday && wday <= 7)
                     {
@@ -341,17 +366,17 @@ namespace EpgTimer.Setting
     public class TunerInfo
     {
         public TunerInfo(string bon) { BonDriver = bon; }
-        public String BonDriver { get; set; }
-        public String TunerNum { get; set; }
-        public UInt32 TunerNumInt { get { return ToUInt(TunerNum); } }
-        public String EPGNum { get; set; }
-        public UInt32 EPGNumInt { get { return ToUInt(EPGNum); } }
+        public string BonDriver { get; set; }
+        public string TunerNum { get; set; }
+        public uint TunerNumInt { get { return ToUInt(TunerNum); } }
+        public string EPGNum { get; set; }
+        public uint EPGNumInt { get { return ToUInt(EPGNum); } }
         public int Priority { get; set; }
         public override string ToString() { return BonDriver; }
-        private UInt32 ToUInt(string s)
+        private uint ToUInt(string s)
         {
-            UInt32 val = 0;
-            UInt32.TryParse(s, out val);
+            uint val = 0;
+            uint.TryParse(s, out val);
             return val;
         }
     }

@@ -22,90 +22,64 @@ namespace EpgTimer
     {
         public static bool ReadOnly { get; set; }
 
-        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
-        private static extern uint
-          GetPrivateProfileString(string lpAppName,
-          string lpKeyName, string lpDefault,
-          StringBuilder lpReturnedString, uint nSize,
-          string lpFileName);
-
-        [DllImport("kernel32.dll", EntryPoint = "GetPrivateProfileStringA")]
-        private static extern uint
-          GetPrivateProfileStringByByteArray(string lpAppName,
-          string lpKeyName, string lpDefault,
-          byte[] lpReturnedString, uint nSize,
-          string lpFileName);
-        
-        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
-        public static extern int
-          GetPrivateProfileInt(string lpAppName,
-          string lpKeyName, int nDefault, string lpFileName);
-
-        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
-        private static extern uint WritePrivateProfileString(
-          string lpAppName,
-          string lpKeyName,
-          string lpString,
-          string lpFileName);
-
         /// <summary>書き込み値はbool型のみtrue:"1",false:"0"、他はvalue.ToString()。ただし空のstringはnull。</summary>
-        public static uint WritePrivateProfileString(string lpAppName, string lpKeyName, object val, string lpFileName)
+        public static bool WritePrivateProfileString(string appName, string keyName, object val, string fileName)
         {
-            if (ReadOnly == true) return 0;
-            string lpString = val == null ? null : !(val is bool) ? val.ToString() : (bool)val ? "1" : "0";
-            return WritePrivateProfileString(lpAppName, lpKeyName, lpString == "" ? null : lpString, lpFileName);
+            if (ReadOnly == true) return false;
+            string valstr = val == null ? null : !(val is bool) ? val.ToString() : (bool)val ? "1" : "0";
+            return NativeMethods.WritePrivateProfileString(appName, keyName, valstr == "" ? null : valstr, fileName);
         }
         /// <summary>デフォルト値の時キーを削除する。書き込み値はbool型のみtrue:"1",false:"0"、他はvalue.ToString()</summary>
-        public static uint WritePrivateProfileString<T>(string lpAppName, string lpKeyName, T val, T defval, string lpFileName)
+        public static bool WritePrivateProfileString<T>(string appName, string keyName, T val, T defval, string fileName)
         {
             //引数をTからobjectにすると、valueがdoubleなどのときEqualsで失敗する
-            return WritePrivateProfileString(lpAppName, lpKeyName, object.Equals(val, defval) == true ? null : (object)val, lpFileName);
+            return WritePrivateProfileString(appName, keyName, object.Equals(val, defval) == true ? null : (object)val, fileName);
         }
 
-        public static string
-          GetPrivateProfileString(string lpAppName,
-          string lpKeyName, string lpDefault, string lpFileName)
+        public static int GetPrivateProfileInt(string appName, string keyName, int nDefault, string fileName)
+        {
+            return NativeMethods.GetPrivateProfileInt(appName, keyName, nDefault, fileName);
+        }
+        public static string GetPrivateProfileString(string appName, string keyName, string def, string fileName)
         {
             StringBuilder buff = null;
             for (uint n = 512; n <= 1024 * 1024; n *= 2)
             {
                 //セクション名取得などのNUL文字分割された結果は先頭要素のみ格納される
                 buff = new StringBuilder((int)n);
-                if (GetPrivateProfileString(lpAppName, lpKeyName, lpDefault, buff, n, lpFileName) < n - 2)
+                if (NativeMethods.GetPrivateProfileString(appName, keyName, def, buff, n, fileName) < n - 2)
                 {
                     break;
                 }
             }
             return buff.ToString();
         }
-
-        public static string GetPrivateProfileFolder(string lpAppName, string lpKeyName, string lpFileName)
-        {
-            var path = IniFileHandler.GetPrivateProfileString(lpAppName ?? "", lpKeyName ?? "", "", lpFileName ?? "");
-            return SettingPath.CheckFolder(path);
-        }
-
         /// <summary>"0"をfalse、それ以外をtrueで読み込む。</summary>
-        public static bool GetPrivateProfileBool(string lpAppName, string lpKeyName, bool defval, string lpFileName)
+        public static bool GetPrivateProfileBool(string appName, string keyName, bool defval, string fileName)
         {
-            return GetPrivateProfileString(lpAppName, lpKeyName, defval == false ? "0" : "1", lpFileName) != "0";
+            return GetPrivateProfileString(appName, keyName, defval == false ? "0" : "1", fileName) != "0";
         }
-        public static double GetPrivateProfileDouble(string lpAppName, string lpKeyName, double defval, string lpFileName)
+        public static double GetPrivateProfileDouble(string appName, string keyName, double defval, string fileName)
         {
-            string s = GetPrivateProfileString(lpAppName, lpKeyName, defval.ToString(), lpFileName);
+            string s = GetPrivateProfileString(appName, keyName, defval.ToString(), fileName);
             double.TryParse(s, out defval);
             return defval;
         }
+        public static string GetPrivateProfileFolder(string appName, string keyName, string fileName)
+        {
+            var path = GetPrivateProfileString(appName ?? "", keyName ?? "", "", fileName ?? "");
+            return SettingPath.CheckFolder(path);
+        }
 
         /// <summary>INIファイルから指定セクションのキー一覧を取得する。lpAppNameにnullを指定すると全セクションの一覧を取得する。</summary>
-        public static string[] GetPrivateProfileKeys(string lpAppName, string lpFileName)
+        public static string[] GetPrivateProfileKeys(string appName, string fileName)
         {
             byte[] buff = null;
             uint resultSize = 0;
             for (uint n = 1024; n <= 1024 * 1024; n *= 2)
             {
                 buff = new byte[n];
-                resultSize = GetPrivateProfileStringByByteArray(lpAppName, null, null, buff, n, lpFileName);
+                resultSize = NativeMethods.GetPrivateProfileStringByByteArray(appName, null, null, buff, n, fileName);
                 if (resultSize < n - 2)
                 {
                     break;
@@ -115,21 +89,21 @@ namespace EpgTimer
         }
 
         /// <summary>INIファイルから連番のキー/セクションを削除する。lpAppNameにnullを指定すると連番セクションを削除する。</summary>
-        public static void DeletePrivateProfileNumberKeys(string lpAppName, string lpFileName, string BaseFront = "", string BaseRear = "", bool deleteBaseName = false)
+        public static void DeletePrivateProfileNumberKeys(string appName, string fileName, string BaseFront = "", string BaseRear = "", bool deleteBaseName = false)
         {
             if (ReadOnly == true) return;
             string numExp = string.IsNullOrEmpty(BaseFront + BaseRear) == false && deleteBaseName == true ? "*" : "+";
-            foreach (string key in IniFileHandler.GetPrivateProfileKeys(lpAppName, lpFileName))
+            foreach (string key in GetPrivateProfileKeys(appName, fileName))
             {
                 if (Regex.Match(key, "^" + BaseFront + "\\d" + numExp + BaseRear + "$").Success == true)
                 {
-                    if (lpAppName != null)
+                    if (appName != null)
                     {
-                        WritePrivateProfileString(lpAppName, key, null, lpFileName);
+                        NativeMethods.WritePrivateProfileString(appName, key, null, fileName);
                     }
                     else
                     {
-                        WritePrivateProfileString(key, null, null, lpFileName);
+                        NativeMethods.WritePrivateProfileString(key, null, null, fileName);
                     }
                 }
             }
@@ -177,7 +151,7 @@ namespace EpgTimer
                         try
                         {
                             string path = Path.Combine(SettingPath.SettingFolderPath, data.Name);
-                            if (data.Size == 0)
+                            if (data.Data == null)
                             {
                                 File.Delete(path);
                                 continue;
@@ -193,6 +167,22 @@ namespace EpgTimer
             }
             catch { err = ErrCode.CMD_ERR; }
             return err;
+        }
+
+        private static class NativeMethods
+        {
+            [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+            public static extern uint GetPrivateProfileString(string lpAppName, string lpKeyName, string lpDefault,
+                                                              StringBuilder lpReturnedString, uint nSize, string lpFileName);
+
+            [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+            public static extern int GetPrivateProfileInt(string lpAppName, string lpKeyName, int nDefault, string lpFileName);
+
+            [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+            public static extern bool WritePrivateProfileString(string lpAppName, string lpKeyName, string lpString, string lpFileName);
+
+            [DllImport("kernel32.dll", EntryPoint = "GetPrivateProfileStringA")]
+            public static extern uint GetPrivateProfileStringByByteArray(string lpAppName, string lpKeyName, string lpDefault, byte[] lpReturnedString, uint nSize, string lpFileName);
         }
     }
 
@@ -338,10 +328,13 @@ namespace EpgTimer
         public double FontSize { get; set; }
         public string TitleColor1 { get; set; }
         public string TitleColor2 { get; set; }
-        public UInt32 TitleCustColor1 { get; set; }
-        public UInt32 TitleCustColor2 { get; set; }
+        public uint TitleCustColor1 { get; set; }
+        public uint TitleCustColor2 { get; set; }
+        public bool ReserveRectShowMarker { get; set; }
         public double ScrollSize { get; set; }
         public bool MouseScrollAuto { get; set; }
+        public double HorizontalScrollSize { get; set; }
+        public bool MouseHorizontalScrollAuto { get; set; }
         public double ServiceWidth { get; set; }
         public bool EpgServiceNameTooltip { get; set; }
         public double MinHeight { get; set; }
@@ -359,7 +352,7 @@ namespace EpgTimer
         public bool EpgExtInfoPopup { get; set; }
         public bool EpgExtInfoTooltip { get; set; }
         public bool EpgInfoSingleClick { get; set; }
-        public Int32 EpgInfoOpenMode { get; set; }
+        public int EpgInfoOpenMode { get; set; }
         public bool EpgTitleIndent { get; set; }
         public bool DisplayNotifyEpgChange { get; set; }
         public bool EpgGradation { get; set; }
@@ -376,11 +369,11 @@ namespace EpgTimer
         public bool EpgChangeBorderOnRecWeekOnly { get; set; }
         public uint EpgChangeBorderMode { get; set; }
         public List<string> ContentColorList { get; set; }
-        public List<UInt32> ContentCustColorList { get; set; }
+        public List<uint> ContentCustColorList { get; set; }
         public List<string> EpgResColorList { get; set; }
-        public List<UInt32> EpgResCustColorList { get; set; }
+        public List<uint> EpgResCustColorList { get; set; }
         public List<string> EpgEtcColors { get; set; }
-        public List<UInt32> EpgEtcCustColors { get; set; }
+        public List<uint> EpgEtcCustColors { get; set; }
         public int ReserveRectFillOpacity { get; set; }
         public bool ReserveRectFillWithShadow { get; set; }
 
@@ -399,8 +392,11 @@ namespace EpgTimer
             TitleColor2 = "Black";
             TitleCustColor1 = 0xFFFFFFFF;
             TitleCustColor2 = 0xFFFFFFFF;
+            ReserveRectShowMarker = true;
             ScrollSize = 240;
             MouseScrollAuto = false;
+            HorizontalScrollSize = 150;
+            MouseHorizontalScrollAuto = false;
             ServiceWidth = 150;
             EpgServiceNameTooltip = false;
             MinHeight = 2;
@@ -475,20 +471,22 @@ namespace EpgTimer
         public bool SortServiceList { get; set; }
         public bool ExitAfterProcessingArgs { get; set; }
         public bool RecinfoErrCriticalDrops { get; set; }
-        public Int32 ReserveToolTipMode { get; set; }
-        public Int32 ReserveEpgInfoOpenMode { get; set; }
+        public int ReserveToolTipMode { get; set; }
+        public int ReserveEpgInfoOpenMode { get; set; }
         public string TunerFontNameService { get; set; }
         public double TunerFontSizeService { get; set; }
         public bool TunerFontBoldService { get; set; }
         public string TunerFontName { get; set; }
         public double TunerFontSize { get; set; }
         public List<string> TunerServiceColors { get; set; }
-        public List<UInt32> TunerServiceCustColors { get; set; }
+        public List<uint> TunerServiceCustColors { get; set; }
         public double TunerMinHeight { get; set; }
         public double TunerMinimumLine { get; set; }
         public double TunerDragScroll { get; set; }
         public double TunerScrollSize { get; set; }
         public bool TunerMouseScrollAuto { get; set; }
+        public double TunerHorizontalScrollSize { get; set; }
+        public bool TunerMouseHorizontalScrollAuto { get; set; }
         public double TunerWidth { get; set; }
         public bool TunerNameTooltip { get; set; }
         public bool TunerServiceNoWrap { get; set; }
@@ -505,8 +503,8 @@ namespace EpgTimer
         public bool TunerInfoSingleClick { get; set; }
         public bool TunerColorModeUse { get; set; }
         public bool TunerDisplayOffReserve { get; set; }
-        public Int32 TunerToolTipMode { get; set; }
-        public Int32 TunerEpgInfoOpenMode { get; set; }
+        public int TunerToolTipMode { get; set; }
+        public int TunerEpgInfoOpenMode { get; set; }
         public string FontReplacePatternEdit { get; set; }
         public double FontSizeReplacePattern { get; set; }
         public bool FontBoldReplacePattern { get; set; }
@@ -542,7 +540,7 @@ namespace EpgTimer
         public List<SearchPresetItem> SearchPresetList { get; set; }
         public bool SetWithoutSearchKeyWord { get; set; }
         public bool SetWithoutRecTag { get; set; }
-        public Int32 RecInfoToolTipMode { get; set; }
+        public int RecInfoToolTipMode { get; set; }
         public string RecInfoColumnHead { get; set; }
         public ListSortDirection RecInfoSortDirection { get; set; }
         public long RecInfoDropErrIgnore { get; set; }
@@ -568,15 +566,20 @@ namespace EpgTimer
         public string FilePlayExe { get; set; }
         public string FilePlayCmd { get; set; }
         public bool FilePlayOnAirWithExe { get; set; }
+        public bool FilePathReplaceRecFile { get; set; }
+        public string FilePathReplacePattern { get; set; }
+        public string FilePathReplaceTestPath { get; set; }
         public bool OpenFolderWithFileDialog { get; set; }
         public List<IEPGStationInfo> IEpgStationList { get; set; }
         public MenuSettingData MenuSet { get; set; }
         public string NWServerIP { get; set; }
-        public UInt32 NWServerPort { get; set; }
-        public UInt32 NWWaitPort { get; set; }
+        public uint NWServerPort { get; set; }
+        public uint NWWaitPort { get; set; }
         public string NWMacAdd { get; set; }
         public List<NWPresetItem> NWPreset { get; set; }
         public bool WakeReconnectNW { get; set; }
+        public bool WakeCheckService { get; set; }
+        public bool WakeCheckServiceDialog { get; set; }
         public bool WoLWaitRecconect { get; set; }
         public double WoLWaitSecond { get; set; }
         public bool SuspendCloseNW { get; set; }
@@ -587,17 +590,17 @@ namespace EpgTimer
         public bool PrebuildEpgAll { get; set; }
         public bool ChkSrvRegistTCP { get; set; }
         public double ChkSrvRegistInterval { get; set; }
-        public Int32 TvTestOpenWait { get; set; }
-        public Int32 TvTestChgBonWait { get; set; }
+        public int TvTestOpenWait { get; set; }
+        public int TvTestChgBonWait { get; set; }
         public string FontNameListView { get; set; }
         public double FontSizeListView { get; set; }
         public bool FontBoldListView { get; set; }
         public List<string> RecEndColors { get; set; }
         public List<uint> RecEndCustColors { get; set; }
         public string ListDefColor { get; set; }
-        public UInt32 ListDefCustColor { get; set; }
+        public uint ListDefCustColor { get; set; }
         public string ListRuledLineColor { get; set; }
-        public UInt32 ListRuledLineCustColor { get; set; }
+        public uint ListRuledLineCustColor { get; set; }
         public bool ListRuledLine { get; set; }
         public bool ListRuledLineContent { get; set; }
         public List<string> RecModeFontColors { get; set; }
@@ -606,9 +609,9 @@ namespace EpgTimer
         public List<uint> ResBackCustColors { get; set; }
         public List<string> StatColors { get; set; }
         public List<uint> StatCustColors { get; set; }
-        public UInt32 ExecBat { get; set; }
-        public UInt32 SuspendChk { get; set; }
-        public UInt32 SuspendChkTime { get; set; }
+        public uint ExecBat { get; set; }
+        public uint SuspendChk { get; set; }
+        public uint SuspendChkTime { get; set; }
         public List<ListColumnInfo> ReserveListColumn { get; set; }
         public List<ListColumnInfo> RecInfoListColumn { get; set; }
         public List<ListColumnInfo> AutoAddEpgColumn { get; set; }
@@ -619,8 +622,9 @@ namespace EpgTimer
         public List<ListColumnInfo> SearchWndColumn { get; set; }
         public string SearchColumnHead { get; set; }
         public ListSortDirection SearchSortDirection { get; set; }
-        public Int32 SearchEpgInfoOpenMode { get; set; }
+        public int SearchEpgInfoOpenMode { get; set; }
         public bool SaveSearchKeyword { get; set; }
+        public bool ShowLogo { get; set; }
         public List<ListColumnInfo> InfoSearchWndColumn { get; set; }
         public string InfoSearchColumnHead { get; set; }
         public ListSortDirection InfoSearchSortDirection { get; set; }
@@ -670,13 +674,13 @@ namespace EpgTimer
 
         //WakeUpHDD関係
         [XmlIgnore]
-        public Int32 RecAppWakeTime { get; set; }
+        public int RecAppWakeTime { get; set; }
         [XmlIgnore]
         public bool WakeUpHdd { get; set; }
         [XmlIgnore]
-        public Int32 NoWakeUpHddMin { get; set; }
+        public int NoWakeUpHddMin { get; set; }
         [XmlIgnore]
-        public Int32 WakeUpHddOverlapNum { get; set; }
+        public int WakeUpHddOverlapNum { get; set; }
         
         //録画設定関係(デフォルトマージン等)
         [XmlIgnore]
@@ -927,6 +931,8 @@ namespace EpgTimer
             TunerDragScroll = 1.5;
             TunerScrollSize = 240;
             TunerMouseScrollAuto = false;
+            TunerHorizontalScrollSize = 150;
+            TunerMouseHorizontalScrollAuto = false;
             TunerWidth = 150;
             TunerNameTooltip = false;
             TunerServiceNoWrap = true;
@@ -1005,6 +1011,9 @@ namespace EpgTimer
             FilePlayExe = "";
             FilePlayCmd = "";
             FilePlayOnAirWithExe = true;
+            FilePathReplaceRecFile = false;
+            FilePathReplacePattern = "";
+            FilePathReplaceTestPath = "C:\\Test\\ファイル";
             OpenFolderWithFileDialog = false;
             IEpgStationList = new List<IEPGStationInfo>();
             MenuSet = new MenuSettingData();
@@ -1014,6 +1023,8 @@ namespace EpgTimer
             NWMacAdd = "";
             NWPreset = new List<NWPresetItem>();
             WakeReconnectNW = false;
+            WakeCheckService = false;
+            WakeCheckServiceDialog = true;
             WoLWaitRecconect = false;
             WoLWaitSecond= 30;
             SuspendCloseNW = false;
@@ -1044,6 +1055,7 @@ namespace EpgTimer
             SearchSortDirection = ListSortDirection.Ascending;
             SearchEpgInfoOpenMode = 0;
             SaveSearchKeyword = true;
+            ShowLogo = false;
             InfoSearchWndColumn = new List<ListColumnInfo>();
             InfoSearchColumnHead = "";
             InfoSearchSortDirection = ListSortDirection.Ascending;
@@ -1457,7 +1469,7 @@ namespace EpgTimer
             //旧CS仮対応コード(+0x70)も変換する。
             foreach (var info in Instance.CustomEpgTabList)
             {
-                info.ViewContentList.AddRange(info.ViewContentKindList.Select(id_old => new EpgContentData((UInt32)(id_old << 16))));
+                info.ViewContentList.AddRange(info.ViewContentKindList.Select(id_old => new EpgContentData((uint)(id_old << 16))));
                 EpgContentData.FixNibble(info.ViewContentList);
                 EpgContentData.FixNibble(info.SearchKey.contentList);
                 info.ViewContentKindList = null;
@@ -1548,7 +1560,7 @@ namespace EpgTimer
             }
         }
 
-        public RecPresetItem RecPreset(Int32 presetID)
+        public RecPresetItem RecPreset(int presetID)
         {
             return Instance.RecPresetList[Math.Max(0, Math.Min(presetID, Instance.RecPresetList.Count - 1))];
         }

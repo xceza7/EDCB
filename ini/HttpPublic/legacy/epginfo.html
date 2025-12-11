@@ -33,8 +33,9 @@ function AddReserve(onid,tsid,sid,eid,post)
       tunerID=GetVarInt(post,'tunerID'),
       partialRecFlag=GetVarInt(post,'partialRecFlag',0,1) or 0
     }
+    local chInfo=BinarySearch(edcb.GetChDataList(),r,CompareFields('onid',false,'tsid',false,'sid'))
     local ev=edcb.SearchEpg(onid,tsid,sid,eid)
-    if ev and ev.startTime and ev.durationSecond and
+    if chInfo and ev and ev.startTime and ev.durationSecond and
        r.recSetting.recMode and
        r.recSetting.priority and
        r.recSetting.suspendMode and
@@ -45,13 +46,7 @@ function AddReserve(onid,tsid,sid,eid,post)
       r.startTime=ev.startTime
       r.startTimeEpg=ev.startTime
       r.durationSecond=ev.durationSecond
-      r.stationName=''
-      for i,v in ipairs(edcb.GetServiceList() or {}) do
-        if v.onid==onid and v.tsid==tsid and v.sid==sid then
-          r.stationName=v.service_name
-          break
-        end
-      end
+      r.stationName=chInfo.serviceName
       return edcb.AddReserveData(r)
     end
   end
@@ -59,13 +54,10 @@ function AddReserve(onid,tsid,sid,eid,post)
 end
 
 ct=CreateContentBuilder(GZIP_THRESHOLD_BYTE)
-ct:Append([=[
-<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd">
+ct:Append(DOCTYPE_HTML4_STRICT..[=[
 <html lang="ja">
 <head>
-<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
-<meta name="viewport" content="initial-scale=1">
-<link rel="stylesheet" type="text/css" href="default.css">
+]=]..DefaultHeadContents()..[=[
 <title>番組詳細 - EDCB</title>
 </head>
 <body>
@@ -73,11 +65,7 @@ ct:Append([=[
 <div id="main">
 ]=])
 
-onid,tsid,sid,eid=(mg.get_var(mg.request_info.query_string,'id') or ''):match('^(%d?%d?%d?%d?%d)%-(%d?%d?%d?%d?%d)%-(%d?%d?%d?%d?%d)%-(%d?%d?%d?%d?%d)$')
-onid=tonumber(onid) or 0
-tsid=tonumber(tsid) or 0
-sid=tonumber(sid) or 0
-eid=tonumber(eid) or 0
+onid,tsid,sid,eid=GetVarEventID(mg.request_info.query_string,'id')
 presetID=GetVarInt(mg.request_info.query_string,'presetID') or 65535
 
 post=AssertPost()
@@ -99,12 +87,19 @@ if not r and presetID==65535 then
   presetID=0
 end
 
+epgDate=0
+ev=edcb.SearchEpg(onid,tsid,sid,eid)
+if ev and ev.startTime then
+  --番組表のdateクエリは今日(深夜4時区切り)を基準(=0)とする
+  epgDate=math.floor((TimeWithZone(ev.startTime)-4*3600)/(24*3600))-math.floor((os.time()+(9-4)*3600)/(24*3600))
+end
+
 ct:Append('  <dl>\n'
-  ..'    <dt>番組情報</dt><dd>\n'..ConvertEpgInfoText2(onid,tsid,sid,eid):gsub('\r?\n','<br>\n')..'</dd>\n')
+  ..'    <dt id="pginfo-term">番組情報</dt><dd id="pginfo-desc">'..DecorateProgramText(ConvertProgramText(ev))..'</dd>\n')
 if r then
   dur=r.startTime.hour*3600+r.startTime.min*60+r.startTime.sec+r.durationSecond
   ct:Append('    <dt>プログラム予約化（プログラム予約化は元に戻せません。番組を特定できなくなるため追従もできません。）</dt><dd>\n'
-    ..'<form method="POST" action="reserveinfo.html?id='..r.reserveID
+    ..'<form method="POST" action="reserveinfo.html?id='..r.reserveID..'&amp;fromepg=1'
     ..'"><div><input type="hidden" name="ctok" value="'..CsrfToken('reserveinfo.html')..'">\n'
     ..'<input type="hidden" name="addchg" value="y">\n'
     ..'予約日時: <input type="text" size="4" name="start-y" value="'..r.startTime.year
@@ -117,7 +112,7 @@ if r then
     ..'">:<input type="text" size="2" name="end-i" value="'..math.floor(dur/60)%60
     ..'">:<input type="text" size="2" name="end-s" value="'..dur%60
     ..'"><br>\n'
-    ..'<input type="submit" value="変更"></div></form></dd>\n')
+    ..'<button type="submit">変更</button></div></form></dd>\n')
 end
 ct:Append('    <dt>プリセット<dt><dd>\n'
   ..'<form action="epginfo.html"><div>'
@@ -137,30 +132,42 @@ end
 if r then
   ct:Append('<option value="65535"'..(preset and '' or ' selected')..'>予約時\n')
 end
-ct:Append('</select> <input type="submit" value="録画設定にロード"></div></form></dd>\n'
+ct:Append('</select> <button type="submit">録画設定にロード</button></div></form></dd>\n'
   ..'    <dt>録画設定<dt><dd>\n'
   ..'<form method="POST" action="'
-  ..(r and 'reserveinfo.html?id='..r.reserveID or 'epginfo.html?id='..onid..'-'..tsid..'-'..sid..'-'..eid)
+  ..(r and 'reserveinfo.html?id='..r.reserveID..'&amp;fromepg=1' or 'epginfo.html?id='..onid..'-'..tsid..'-'..sid..'-'..eid)
   ..'"><div><input type="hidden" name="presetID" value="'..(preset and presetID or 65535)..'">\n'
   ..'<input type="hidden" name="ctok" value="'..CsrfToken(r and 'reserveinfo.html')..'">\n'
   ..'<input type="hidden" name="addchg" value="y">\n'
-  ..RecSettingTemplate(rs)..'<input type="submit" value="'..(r and '変更' or '追加')..'"></div></form></dd>\n')
+  ..RecSettingTemplate(rs)..'<button type="submit">'..(r and '変更' or '追加')..'</button></div></form></dd>\n')
 if r then
   ct:Append('    <dt>-</dt><dd>\n'
     ..'<form method="POST" action="reserveinfo.html?id='..r.reserveID..'"><div>\n'
     ..'<input type="hidden" name="ctok" value="'..CsrfToken('reserveinfo.html')..'">\n'
     ..'<input type="hidden" name="del" value="y">\n'
-    ..'<input type="submit" value="削除"></div></form></dd>\n')
+    ..'<button type="submit">削除</button></div></form></dd>\n')
 end
 
 ct:Append([=[
   </dl>
 </div>
 <div id="footer">
-  <a href="epg.html">番組表</a> <a href="epglist.html?id=]=]..onid..'-'..tsid..'-'..sid..[=[#now">リスト番組表</a>
+  <a href="epg.html?date=]=]..epgDate..[=[">番組表</a> <a href="epglist.html?id=]=]..onid..'-'..tsid..'-'..sid..[=[#now">リスト番組表</a>
 </div>
+<script type="text/javascript">
+(function(){
+  var desc=document.getElementById("pginfo-desc");
+  if(desc&&desc.textContent){
+    var a=document.createElement("a");
+    a.download="a.program.txt";
+    a.href=URL.createObjectURL(new Blob(["\ufeff",desc.textContent],{endings:"native",type:"text/plain"}));
+    a.innerText="(DL)";
+    document.getElementById("pginfo-term").appendChild(a);
+  }
+})();
+</script>
 </body>
 </html>
 ]=])
 ct:Finish()
-mg.write(ct:Pop(Response(200,'text/html','utf-8',ct.len)..(ct.gzip and 'Content-Encoding: gzip\r\n' or '')..'\r\n'))
+mg.write(ct:Pop(Response(200,'text/html','utf-8',ct.len,ct.gzip)..'\r\n'))

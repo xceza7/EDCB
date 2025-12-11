@@ -3,22 +3,23 @@
 
 #include "StructDef.h"
 #include "EpgDataCap3Def.h"
+#include <functional>
 
-//チャンネルを__int64としてキーにする
+//チャンネルをLONGLONGとしてキーにする
 static inline LONGLONG Create64Key(WORD onid, WORD tsid, WORD sid) { return sid | (DWORD)tsid << 16 | (LONGLONG)onid << 32; }
-//EventIDをunsigned __int64としてキーにする
+//EventIDをULONGLONGとしてキーにする
 static inline ULONGLONG Create64PgKey(WORD onid, WORD tsid, WORD sid, WORD eid) { return eid | (DWORD)sid << 16 | (ULONGLONG)tsid << 32 | (ULONGLONG)onid << 48; }
 //CRC32をもとめる
 DWORD CalcCrc32(int n, const BYTE* c);
 //MJD->I64Time変換
-__int64 MJDtoI64Time(DWORD mjd, DWORD bcdTime);
+LONGLONG MJDtoI64Time(DWORD mjd, DWORD bcdTime);
 
 //iniファイルから予想ビットレートを取得する
 DWORD GetBitrateFromIni(WORD onid, WORD tsid, WORD sid);
 
 //EPG情報をTextに変換
-wstring ConvertEpgInfoText(const EPGDB_EVENT_INFO* info, const wstring* serviceName = NULL, const wstring* extraText = NULL);
-wstring ConvertEpgInfoText2(const EPGDB_EVENT_INFO* info, const wstring& serviceName);
+wstring ConvertEpgInfoText(const EPGDB_EVENT_INFO& info, LPCWSTR serviceName = NULL, LPCWSTR extraText = NULL);
+wstring ConvertProgramText(const EPGDB_EVENT_INFO& info, const std::function<LPCWSTR(WORD, WORD, WORD)>& resolveServiceID);
 void AppendEpgContentInfoText(wstring& text, const EPGDB_EVENT_INFO& info);
 void AppendEpgComponentInfoText(wstring& text, const EPGDB_EVENT_INFO& info);
 void AppendEpgAudioComponentInfoText(wstring& text, const EPGDB_EVENT_INFO& info);

@@ -18,12 +18,14 @@ public:
 		bool chkGroupEvent;
 		BYTE recEndMode;
 		bool reboot;
+		bool noFileStreaming;
+		DWORD noStandbyTime;
+#ifdef _WIN32
 		bool noUsePC;
 		DWORD noUsePCTime;
-		bool noFileStreaming;
 		bool noShareFile;
-		DWORD noStandbyTime;
 		vector<wstring> noSuspendExeList;
+#endif
 		vector<wstring> viewBonList;
 		DWORD ngEpgCapTime;
 		DWORD ngEpgCapTunerTime;
@@ -55,7 +57,9 @@ public:
 		int delReserveMode;
 		int recAppWakeTime;
 		bool recMinWake;
-		bool recView;
+		bool openViewForViewing;
+		bool openViewForRec;
+		bool openViewAlways;
 		bool recNW;
 		bool pgInfoLog;
 		bool pgInfoLogAsUtf8;

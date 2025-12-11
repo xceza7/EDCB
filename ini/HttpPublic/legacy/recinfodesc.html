@@ -1,16 +1,17 @@
 -- vim:set ft=lua:
 dofile(mg.script_name:gsub('[^\\/]*$','')..'util.lua')
+if JKRDLOG_PATH then
+  dofile(mg.script_name:gsub('[^\\/]*$','')..'jkconst.lua')
+end
 
+--<0:再生画面へのリンク, 0:DLリンク, 1:トランスコード再生画面, 2～:直接再生画面(偶数:ローカルファイル再生)
 vtag=GetVarInt(mg.request_info.query_string,'vtag') or -1
 
 ct=CreateContentBuilder(GZIP_THRESHOLD_BYTE)
-ct:Append([=[
-<!DOCTYPE HTML]=]..(vtag<=0 and ' PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd"' or '')..[=[>
+ct:Append((vtag<=0 and DOCTYPE_HTML4_STRICT or '<!DOCTYPE html>\n')..[=[
 <html lang="ja">
 <head>
-<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
-<meta name="viewport" content="initial-scale=1">
-<link rel="stylesheet" type="text/css" href="default.css">
+]=]..DefaultHeadContents()..[=[
 <title>録画済み詳細 - EDCB</title>
 </head>
 <body>
@@ -19,38 +20,70 @@ ct:Append([=[
 ]=])
 
 id=GetVarInt(mg.request_info.query_string,'id') or 0
-offset=GetVarInt(mg.request_info.query_string,'offset',0,100)
-audio2=GetVarInt(mg.request_info.query_string,'audio2')==1
-dual=GetVarInt(mg.request_info.query_string,'dual',0,2)
-cinema=GetVarInt(mg.request_info.query_string,'cinema')==1
+xq=GetTranscodeQueries(mg.request_info.query_string)
+w=edcb.GetRecFileInfoBasic(id)
 
 post=AssertPost()
 if post then
   if mg.get_var(post,'protect') then
     edcb.ChgProtectRecFileInfo(id,mg.get_var(post,'protect')=='y')
     ct:Append('  <div id="result">変更しました</div>\n')
-  elseif mg.get_var(post,'del') then
-    edcb.DelRecFileInfo(id)
-    ct:Append('  <div id="result">削除しました</div>\n')
+  elseif mg.get_var(post,'ren') then
+    ren=DocumentToNativePath(mg.get_var(post,'ren'))
+    if not w or not ren then
+      ct:Append('  <div id="result">パスが不正のためリネームできません</div>\n')
+    elseif not ren:find('[^'..DIR_SEPS..']%.[0-9A-Za-z]+$') or
+           not IsEqualPath(ren:match('%.[0-9A-Za-z]+$'),w.recFilePath:match('%.[0-9A-Za-z]+$') or '') then
+      ct:Append('  <div id="result">拡張子はリネームできません</div>\n')
+    elseif not ren:find('['..DIR_SEPS..'][^'..DIR_SEPS..']+$') or
+           not (EdcbFindFilePlain(ren:gsub('['..DIR_SEPS..'][^'..DIR_SEPS..']+$','')) or {}).isdir then
+      ct:Append('  <div id="result">移動先のディレクトリが存在しません</div>\n')
+    elseif not EdcbFindFilePlain(w.recFilePath) then
+      --情報だけ変更
+      edcb.ChgPathRecFileInfo(id,ren)
+      w.recFilePath=ren
+      ct:Append('  <div id="result">リネームしました</div>\n')
+    elseif not IsEqualPath(ren,w.recFilePath) and EdcbFindFilePlain(ren) then
+      ct:Append('  <div id="result">移動先にファイルが存在します</div>\n')
+    elseif not edcb.os.rename(w.recFilePath,ren) then
+      ct:Append('  <div id="result">ファイルを移動できません</div>\n')
+    else
+      --拡張子が付加されたファイルも移動する
+      oriName=w.recFilePath:match('[^'..DIR_SEPS..']*$')
+      for i,v in ipairs(edcb.FindFile(w.recFilePath:sub(1,#w.recFilePath-#oriName)..oriName:gsub('%*','?')..'.*',0) or {}) do
+        if #oriName<#v.name and IsEqualPath(oriName,v.name:sub(1,#oriName)) then
+          edcb.os.rename(w.recFilePath..v.name:sub(#oriName+1),ren..v.name:sub(#oriName+1))
+        end
+      end
+      --録画情報保存フォルダのファイルも移動する
+      recInfoFolder=edcb.GetPrivateProfile('SET','RecInfoFolder','','Common.ini')
+      if recInfoFolder~='' then
+        renName=ren:match('[^'..DIR_SEPS..']*$')
+        for i,v in ipairs({'.err','.program.txt'}) do
+          edcb.os.rename(PathAppend(recInfoFolder,oriName..v),PathAppend(recInfoFolder,renName..v))
+        end
+      end
+      edcb.ChgPathRecFileInfo(id,ren)
+      w.recFilePath=ren
+      ct:Append('  <div id="result">リネームしました</div>\n')
+    end
   end
 end
 
-w=edcb.GetRecFileInfoBasic(id)
+thumbs={''}
 edcb.htmlEscape=15
 v=edcb.GetRecFileInfo(id)
 if v then
-  if #v.programInfo>0 then
-    v.programInfo=DecorateUri(v.programInfo)
-  elseif v.eid~=65535 then
+  if #v.programInfo==0 and v.eid~=65535 then
     --過去番組情報を探してみる
     ev=edcb.EnumEventInfoArchive and edcb.EnumEventInfoArchive({{onid=v.onid,tsid=v.tsid,sid=v.sid}},{startTime=v.startTime,durationSecond=1})
     if ev and #ev>0 then
-      v.programInfo=ConvertEpgInfoText2(ev[1])
+      v.programInfo=ConvertProgramText(ev[1])
     else
       --番組情報を探してみる
       ev=edcb.SearchEpg(v.onid,v.tsid,v.sid,v.eid)
       if ev and ev.startTime and os.time(ev.startTime)==os.time(v.startTime) then
-        v.programInfo=ConvertEpgInfoText2(ev)
+        v.programInfo=ConvertProgramText(ev)
       end
     end
   end
@@ -59,48 +92,95 @@ if v then
     ..'    <dt>結果</dt><dd>'..v.comment..'</dd>\n'
     ..'    <dt>ドロップ</dt><dd>'..v.drops..'</dd>\n'
     ..'    <dt>スクランブル</dt><dd>'..v.scrambles..'</dd>\n'
-    ..'    <dt>ファイル →<a href="recinfodesc.html?id='..v.id..(offset and '&amp;offset='..offset or '')..(audio2 and '&amp;audio2=1' or '')
-    ..(dual and '&amp;dual='..dual or '')..(cinema and '&amp;cinema=1' or '')..'&amp;vtag='..(vtag==0 and '-1">Video' or '0">DL')..'</a></dt><dd>\n')
+    ..'    <dt>ファイル</dt><dd>\n')
   ref=w and NativeToDocumentPath(w.recFilePath)
   if ref then
-    for i,ext in ipairs({'.mp4','.webm',''}) do
-      ff=edcb.FindFile and edcb.FindFile(w.recFilePath..ext,1)
+    xlist={table.unpack(MEDIA_EXTENSION_LIST)}
+    xlist[#xlist+1]=''
+    for i,ext in ipairs(xlist) do
+      ff=EdcbFindFilePlain(w.recFilePath..ext)
       if ff then
-        ct:Append((vtag==i and '<video autoplay controls style="max-width:95%" src="' or '<a href="')
-          ..(vtag~=0 and vtag~=i and 'recinfodesc.html?id='..v.id..'&amp;vtag='..i or PathToRoot()..mg.url_encode(ref..ext):gsub('%%2f','/'))
-          ..'">/'..EdcbHtmlEscape(ref..ext)..(vtag==i and '</video>' or '</a>'))
+        if vtag==i*2 or vtag==i*2+1 then
+          if vtag%2==0 then
+            ct:Append('<div><input id="input-file" type="file" accept="video/*">'..(ext=='' and '(filename:'..mg.md5(ref:upper()):sub(27)..')' or '')..'</div>')
+          end
+          ct:Append(VideoWrapperBegin()
+            ..'<video id="video" autoplay playsinline controls '..(vtag%2==0 and 'data-' or '')..'src="'..PathToRoot()..mg.url_encode(ref..ext):gsub('%%2f','/')..'">/'..EdcbHtmlEscape(ref..ext)
+            ..'<track id="vid-meta" kind="metadata"'..(ext=='' and '' or ' src="'..PathToRoot()..mg.url_encode(ref..ext):gsub('%%2f','/'):gsub('%.[0-9A-Za-z]+$','')..'.vtt"')..' type="text/vtt" default>'
+            ..'</video>'..VideoWrapperEnd(JKRDLOG_PATH and GetChatStreamNameList(),true)..'\n'..VideoScriptTemplate(ext==''))
+        else
+          ct:Append((ext=='' and '' or '<a href="recinfodesc.html?id='..v.id..'&amp;vtag='..(i*2+1)..'">')
+            ..'/'..EdcbHtmlEscape(ref..ext)..(ext=='' and '' or '</a>')
+            ..'\n[<a href="recinfodesc.html?id='..v.id..'&amp;vtag='..(i*2)..'">OpenFile</a>]'
+            ..'\n[<a href="'..PathToRoot()..mg.url_encode(ref..ext):gsub('%%2f','/')..'" download>DL</a>]')
+        end
         if ext=='' then
           fsec,fsize=0,0
+          shiftable=false
           f=edcb.io.open(w.recFilePath,'rb')
           if f then
             fsec,fsize=GetDurationSec(f)
+            if vtag<=0 then
+              thumbs=ThumbnailTemplate(f,fsec,fsize,ref)
+            end
+            if JKRDLOG_PATH and vtag==1 then
+              --終端が現在時刻よりも昔ならば実況を逐次取得する必要はないのでshiftableにする
+              tot=GetTotAndServiceID(f)
+              shiftable=tot and tot+fsec+60<os.time()
+            end
             f:close()
           end
-          ct:Append(' ('..('%dm%02ds|'):format(math.floor(fsec/60),fsec%60)..math.floor(fsize/1048576)..'M)<br>\n'
-            ..'<form method="GET" action="'..(vtag==0 and 'xcode.lua' or 'recinfodesc.html')..'"><div>\n'
+          ct:Append(' ('..('%dm%02ds|'):format(math.floor(fsec/60),fsec%60)..math.floor(fsize/1048576)..'M)\n'
+            ..'<label class="expand-on-checked"><input type="checkbox">edit</label>\n'
+            ..'<form class="expand-on-checked" method="POST" action="recinfodesc.html?id='..v.id..'"><div>\n'
+            ..'<input type="hidden" name="ctok" value="'..CsrfToken()..'">\n'
+            ..'<input type="text" name="ren" value="/'..EdcbHtmlEscape(ref)..'" style="width:95%"><br><button type="submit">リネーム</button>\n'
+            ..'※拡張子が付加されたファイルも移動します(.err, .program.txtなど)\n'
+            ..'</div></form>\n'
+            ..'<form id="vid-form" action="'..(vtag==0 and 'xcode.lua' or 'recinfodesc.html')..'"><div>\n'
             ..(vtag==0 and '<input type="hidden" name="fname" value="'..EdcbHtmlEscape(ref)..'">\n'
-                 or '<input type="hidden" name="id" value="'..v.id..'">\n<input type="hidden" name="vtag" value="10">\n')
-            ..'<input type="submit" value="xcode.lua">\n'
-            ..'offset: <select name="offset">')
-          for j=0,95,5 do
-            ct:Append('<option value="'..j..'"'..((offset or 0)==j and ' selected' or '')..'>'
-              ..(fsec>0 and ('%dm%02ds|'):format(math.floor(fsec*j/100/60),fsec*j/100%60) or '')..j..'%')
+                 or '<input type="hidden" name="id" value="'..v.id..'">\n'
+                   ..'<input type="hidden" name="vtag" value="1">\n'
+                   ..'<input type="hidden" name="'..(vtag==1 and 're' or '')..'load" value="'..(xq.loadKey or edcb.CreateRandom and edcb.CreateRandom(8) or os.time()%86400)..'">\n')
+            ..'<button type="submit">xcode</button>\n'
+            ..'→<a href="recinfodesc.html?id='..v.id..ConstructTranscodeQueries(xq)
+            ..'&amp;vtag='..(vtag==0 and '-1">Video' or '0">DL')..'</a>\n'
+            ..TranscodeSettingTemplate(xq,vtag==0,fsec)
+            ..(vtag==0 and '<br>※OpenFile用のファイルを作成するときは[TS-Live!以外][0m00s][x1.0]を選択してxcodeしてください\n' or '')
+            ..'</div></form>'..thumbs[1])
+          if vtag==1 then
+            src='xcode.lua?fname='..mg.url_encode(ref)..ConstructTranscodeQueries(xq)
+            ct:Append('\n'..VideoWrapperBegin()
+              ..(xq.tslive and '<canvas id="video" data-pausable="1" data-src="'..src..'"></canvas>' or
+                   '<video id="video" autoplay playsinline controls '..(ALLOW_HLS and 'data-' or '')..'src="'..src..'">xcode</video>')
+              ..VideoWrapperEnd(JKRDLOG_PATH and GetChatStreamNameList(),shiftable)..'\n'..TranscodeScriptTemplate(false,xq.caption,xq.jikkyo,{ofssec=fsec*(xq.offset or 0)/100,fast=xq.fast}))
+            if xq.tslive then
+              ct:Append(TsliveScriptTemplate(xq.autoCinema))
+            elseif ALLOW_HLS then
+              ct:Append(HlsScriptTemplate('xcode.lua'))
+            end
           end
-          ct:Append('</select>\n'
-            ..'<input type="checkbox" name="audio2" value="1"'..(audio2 and ' checked' or '')..'>audio2\n'
-            ..'<select name="dual">'
-            ..'<option value="0"'..(dual~=1 and dual~=2 and ' selected' or '')..'>*'
-            ..'<option value="1"'..(dual==1 and ' selected' or '')..'>dual-main'
-            ..'<option value="2"'..(dual==2 and ' selected' or '')..'>dual-sub'
-            ..'</select>\n'
-            ..'<input type="checkbox" name="cinema" value="1"'..(cinema and ' checked' or '')..'>cinema\n'
-            ..'</div></form>')
-          if vtag==10 then
-             ct:Append('\n<video autoplay controls style="max-width:95%" src="xcode.lua?fname='..mg.url_encode(ref)..(offset and '&amp;offset='..offset or '')
-               ..(audio2 and '&amp;audio2=1' or '')..(dual and '&amp;dual='..dual or '')..(cinema and '&amp;cinema=1' or '')..'">xcode.lua</video>')
-          end
+          ct:Append([=[
+<div style="display:none"><label><input type="checkbox" id="cb-ccinfo">字幕リスト</label>
+<div id="ccinfo-desc" style="display:none"></div></div>
+<script type="text/javascript" src="ccinfo_script.js"></script>
+<script type="text/javascript">
+runCCInfoScript("]=]..'vtt.lua?fname='..mg.url_encode(ref)..'",'
+  ..((vtag==i*2 or vtag==i*2+1) and 'function(uri){document.getElementById("vid-meta").src=uri;}' or 'true')
+  ..((vtag==1 or vtag==i*2 or vtag==i*2+1) and ',seekVideo,"#vid-wrap"' or ',seekVideoByFormSelect,"#vid-form"')..[=[);
+</script>
+]=])
         else
-          ct:Append(' ('..math.floor(ff[1].size/1048576)..'M)<br>\n')
+          ct:Append((vtag~=i*2 and vtag~=i*2+1 and '\n[<a href="mux_to_ts.lua?fname='..mg.url_encode(ref..ext)..'" download>Mux-to-TS</a>]' or '')
+            ..' ('..math.floor(ff.size/1048576)..'M)<br>\n')
+        end
+      else
+        --ファイルが見つからない場合もリネームはできるようにしておく
+        if ext=='' then
+          ct:Append('<form method="POST" action="recinfodesc.html?id='..v.id..'"><div>\n'
+            ..'<input type="hidden" name="ctok" value="'..CsrfToken()..'">\n'
+            ..'<input type="text" name="ren" value="/'..EdcbHtmlEscape(ref)..'" style="width:95%"><br><button type="submit">リネーム</button>\n'
+            ..'</div></form>\n')
         end
       end
     end
@@ -110,24 +190,42 @@ if v then
     ..'<form method="POST" action="recinfodesc.html?id='..v.id..'"><div>\n'
     ..'<input type="hidden" name="ctok" value="'..CsrfToken()..'">\n'
     ..'<input type="hidden" name="protect" value="'..(v.protectFlag and 'n' or 'y')..'">\n'
-    ..'<input type="submit" value="'..(v.protectFlag and 'Yes' or 'No')..'"></div></form></dd>\n'
-    ..(#v.programInfo>0 and '    <dt>番組情報</dt><dd>\n'..v.programInfo:gsub('\r?\n', '<br>\n')..'</dd>\n' or '')
+    ..'<button type="submit">'..(v.protectFlag and 'Yes' or 'No')..'</button></div></form></dd>\n'
+    ..(#v.programInfo>0 and '    <dt id="pginfo-term">番組情報</dt><dd id="pginfo-desc">'..DecorateProgramText(v.programInfo)..'</dd>\n' or '')
     ..(#v.errInfo>0 and '    <dt>エラーログ</dt><dd>\n'..v.errInfo:gsub('\r?\n', '<br>\n')..'</dd>\n' or '')
     ..'    <dt>-</dt><dd>\n'
-    ..'<form method="POST" action="recinfodesc.html?id='..v.id..'"><div>\n'
-    ..'<input type="hidden" name="ctok" value="'..CsrfToken()..'">\n'
-    ..'<input type="hidden" name="del" value="y">\n'
-    ..'<input type="submit" value="削除"></div></form></dd>\n'
+    ..'<form method="POST" action="recinfo.html"><div>\n'
+    ..'<input type="hidden" name="ctok" value="'..CsrfToken('recinfo.html')..'">\n'
+    ..'<input type="hidden" name="del" value="'..v.id..'">\n'
+    ..'<button type="submit">削除</button></div></form></dd>\n'
     ..'  </dl>\n')
 end
 
 ct:Append([=[
 </div>
 <div id="footer">
-  <a href="recinfo.html">録画済み一覧</a>
+  <a href="recinfo.html]=]..(v and '?id='..v.id or '')..[=[">録画済み一覧</a>
 </div>
+]=])
+for i=2,#thumbs do ct:Append(thumbs[i]) end
+ct:Append([=[
+<script type="text/javascript">
+(function(){
+  var desc=document.getElementById("pginfo-desc");
+  if(desc&&desc.textContent){
+    var a=document.createElement("a");
+    a.download="a.program.txt";
+    a.href=URL.createObjectURL(new Blob(["\ufeff",desc.textContent],{endings:"native",type:"text/plain"}));
+    a.innerText="(DL)";
+    document.getElementById("pginfo-term").appendChild(a);
+  }
+})();
+</script>
 </body>
 </html>
 ]=])
 ct:Finish()
-mg.write(ct:Pop(Response(200,'text/html','utf-8',ct.len)..(ct.gzip and 'Content-Encoding: gzip\r\n' or '')..'\r\n'))
+mg.write(ct:Pop(Response(200,'text/html','utf-8',ct.len,ct.gzip)
+  ..'Cross-Origin-Embedder-Policy: require-corp\r\n'
+  ..'Cross-Origin-Opener-Policy: same-origin\r\n'
+  ..'\r\n'))

@@ -38,23 +38,33 @@ class thread_
 {
 public:
 	thread_() : m_h(nullptr) {}
+	explicit thread_(void(*f)()) {
+		struct Th {
+			static UINT WINAPI func(void* p) {
+				reinterpret_cast<void(*)()>(p)();
+				return 0;
+			}
+		};
+		m_h = reinterpret_cast<void*>(_beginthreadex(nullptr, 0, Th::func, reinterpret_cast<void*>(f), 0, nullptr));
+		if (!m_h) throw std::runtime_error("");
+	}
 	template<class Arg> thread_(void(*f)(Arg), Arg arg) {
 		struct Th {
 			static UINT WINAPI func(void* p) {
-				void(*thf)(Arg) = static_cast<Th*>(p)->f;
-				Arg tharg = static_cast<Th*>(p)->arg;
-				static_cast<Th*>(p)->b = false;
-				thf(tharg);
+				std::unique_ptr<Th> th(static_cast<Th*>(p));
+				th->f(std::move(th->arg));
 				return 0;
 			}
-			Th(void(*thf)(Arg), Arg tharg) : b(true), f(thf), arg(tharg) {}
-			atomic_bool_ b;
+			Th(void(*thf)(Arg), Arg tharg) : f(thf), arg(tharg) {}
 			void(*f)(Arg);
 			Arg arg;
-		} th(f, arg);
-		m_h = reinterpret_cast<void*>(_beginthreadex(nullptr, 0, Th::func, &th, 0, nullptr));
-		if (!m_h) throw std::runtime_error("");
-		while (th.b) Sleep(0);
+		};
+		Th* pth = new Th(f, arg);
+		m_h = reinterpret_cast<void*>(_beginthreadex(nullptr, 0, Th::func, pth, 0, nullptr));
+		if (!m_h) {
+			delete pth;
+			throw std::runtime_error("");
+		}
 	}
 	~thread_() { if (m_h) std::terminate(); }
 	bool joinable() const { return !!m_h; }
@@ -90,11 +100,29 @@ private:
 	CRITICAL_SECTION m_cs;
 };
 
+class lock_recursive_mutex
+{
+public:
+	lock_recursive_mutex(recursive_mutex_& mtx) : m_mtx(mtx) { m_mtx.lock(); }
+	~lock_recursive_mutex() { m_mtx.unlock(); }
+private:
+	lock_recursive_mutex(const lock_recursive_mutex&);
+	lock_recursive_mutex& operator=(const lock_recursive_mutex&);
+	recursive_mutex_& m_mtx;
+};
+
+inline void SleepForMsec(DWORD msec)
+{
+	Sleep(msec);
+}
+
 #else
+#include <chrono>
 #include <thread>
 #include <mutex>
 #include <atomic>
 #include <stdexcept>
+#include <errno.h>
 #include <poll.h>
 #include <sys/eventfd.h>
 #include <unistd.h>
@@ -102,18 +130,14 @@ typedef std::atomic_int atomic_int_;
 typedef std::atomic_bool atomic_bool_;
 typedef std::thread thread_;
 typedef std::recursive_mutex recursive_mutex_;
-#endif
+typedef std::lock_guard<recursive_mutex_> lock_recursive_mutex;
 
-class CBlockLock
+inline void SleepForMsec(DWORD msec)
 {
-public:
-	CBlockLock(recursive_mutex_* mtx) : m_mtx(mtx) { m_mtx->lock(); }
-	~CBlockLock() { m_mtx->unlock(); }
-private:
-	CBlockLock(const CBlockLock&);
-	CBlockLock& operator=(const CBlockLock&);
-	recursive_mutex_* m_mtx;
-};
+	std::this_thread::sleep_for(std::chrono::milliseconds(msec));
+}
+
+#endif
 
 class CAutoResetEvent
 {
@@ -127,25 +151,38 @@ public:
 	void Set() { SetEvent(m_h); }
 	void Reset() { ResetEvent(m_h); }
 	HANDLE Handle() { return m_h; }
-	bool WaitOne(unsigned int timeout = 0xFFFFFFFF) { return WaitForSingleObject(m_h, timeout) == WAIT_OBJECT_0; }
+	bool WaitOne(DWORD timeout = 0xFFFFFFFF) { return WaitForSingleObject(m_h, timeout) == WAIT_OBJECT_0; }
 #else
 	CAutoResetEvent(bool initialState = false) {
-		m_efd = eventfd(0, EFD_CLOEXEC);
+		m_efd = eventfd(initialState, EFD_CLOEXEC | EFD_NONBLOCK);
 		if (m_efd == -1) throw std::runtime_error("");
 	}
 	~CAutoResetEvent() { close(m_efd); }
-	void Set() { __int64 n = 1; write(m_efd, &n, sizeof(n)); }
+	void Set() {
+		LONGLONG n = 1;
+		while (write(m_efd, &n, sizeof(n)) < 0) {
+			if (errno != EAGAIN) throw std::runtime_error("");
+		}
+	}
 	void Reset() { WaitOne(0); }
 	int Handle() { return m_efd; }
-	bool WaitOne(unsigned int timeout = 0xFFFFFFFF) {
-		pollfd pfd;
-		pfd.fd = m_efd;
-		pfd.events = POLLIN;
-		if (poll(&pfd, 1, (int)timeout) > 0 && (pfd.revents & POLLIN)) {
-			__int64 n;
-			return read(m_efd, &n, sizeof(n)) == sizeof(n);
+	bool WaitOne(DWORD timeout = 0xFFFFFFFF) {
+		LONGLONG n;
+		while (read(m_efd, &n, sizeof(n)) < 0) {
+			if (errno != EAGAIN) throw std::runtime_error("");
+			if (!timeout) return false;
+			pollfd pfd;
+			pfd.fd = m_efd;
+			pfd.events = POLLIN;
+			if (poll(&pfd, 1, timeout < 0x80000000 ? (int)timeout : -1) < 0 && errno != EINTR) {
+				throw std::runtime_error("");
+			}
+			if (timeout < 0x80000000) {
+				// シグナル発生時や競合時はtimeoutよりも早くタイムアウトするので注意
+				timeout = 0;
+			}
 		}
-		return false;
+		return true;
 	}
 #endif
 private:

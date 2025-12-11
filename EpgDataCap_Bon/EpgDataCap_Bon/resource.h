@@ -5,6 +5,7 @@
 #define IDD_EPGDATACAP_BON_DIALOG       102
 #define IDD_EPGDATACAP_BON_DIALOG_1     103
 #define IDD_EPGDATACAP_BON_DIALOG_2     104
+#define IDS_VERSION_TEXT                115
 #define IDI_ICON_BLUE                   129
 #define IDD_DIALOG_SETTING              129
 #define IDI_ICON_GRAY                   130
@@ -63,6 +64,7 @@
 #define IDC_COMBO_DIALOG_TEMPLATE       1022
 #define IDC_CHECK_CS1                   1022
 #define IDC_EDIT_WAIT_PACKET            1023
+#define IDC_STATIC_VERSION_TEXT         1023
 #define IDC_CHECK_CS2                   1023
 #define IDC_IPADDRESS_TCP               1024
 #define IDC_CHECK_NEXTPG                1024
@@ -80,9 +82,11 @@
 #define IDC_CHECK_CS3                   1027
 #define IDC_EDIT_PORT_TCP               1028
 #define IDC_EDIT_WRITE_BUFF_MAX         1028
+#define IDC_CHECK_VIEW_SINGLE           1028
 #define IDC_CHECK_BACK_CS3              1028
 #define IDC_CHECK_ENABLE_DECODE         1029
 #define IDC_RADIO_TCP                   1029
+#define IDC_CHECK_VIEW_CLOSE_ON_EXIT    1029
 #define IDC_CHECK_OVER_WRITE            1030
 #define IDC_RADIO_SRV_PIPE              1030
 #define IDC_CHECK_ALL_SERVICE           1031

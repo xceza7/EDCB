@@ -6,6 +6,7 @@
 
 #include "../../BonCtrl/BonCtrl.h"
 #include "../../Common/PipeServer.h"
+#include "AppSetting.h"
 #include "EpgDataCap_BonDef.h"
 #include "SettingDlg.h"
 
@@ -15,14 +16,9 @@ class CEpgDataCap_BonDlg
 // コンストラクション
 public:
 	CEpgDataCap_BonDlg();	// 標準コンストラクター
+	~CEpgDataCap_BonDlg();
 	INT_PTR DoModal();
-
-	void SetInitBon(LPCWSTR bonFile){ iniBonDriver = bonFile; }
-	void SetIniMin(BOOL minFlag){ iniMin = minFlag; };
-	void SetIniNW(BOOL networkFlag){ iniNetwork = networkFlag; };
-	void SetIniView(BOOL viewFlag){ iniView = viewFlag; };
-	void SetIniNWUDP(BOOL udpFlag){ iniUDP = udpFlag; };
-	void SetIniNWTCP(BOOL tcpFlag){ iniTCP = tcpFlag; };
+	void ParseCommandLine(LPWSTR* argv, int argc);
 
 // ダイアログ データ
 	enum { IDD = IDD_EPGDATACAP_BON_DIALOG };
@@ -31,6 +27,9 @@ protected:
 	static UINT taskbarCreated;
 	static BOOL disableKeyboardHook;
 protected:
+	static HICON LoadLargeOrSmallIcon(int iconID, bool isLarge);
+	//現在値と異なるときだけSetDlgItemText()を呼ぶ
+	static void CheckAndSetDlgItemText(HWND wnd, int id, LPCWSTR text);
 	void ReloadSetting();
 	void BtnUpdate(DWORD guiMode);
 	//タスクトレイ
@@ -54,30 +53,10 @@ protected:
 	HHOOK m_hKeyboardHook;
 	HICON m_hIcon;
 	HICON m_hIcon2;
+	HANDLE m_hViewProcess;
 
-	HICON iconRed;
-	HICON iconBlue;
-	HICON iconGreen;
-	HICON iconGray;
-	HICON iconOlRec;
-	HICON iconOlEpg;
-	BOOL modifyTitleBarText;
-	BOOL overlayTaskIcon;
-	BOOL minTask;
-	wstring recFileName;
-	BOOL overWriteFlag;
-	wstring viewPath;
-	wstring viewOpt;
-	int dropSaveThresh;
-	int scrambleSaveThresh;
-	BOOL dropLogAsUtf8;
-	DWORD tsBuffMaxCount;
-	int writeBuffMaxCount;
-	int traceBonDriverLevel;
-	int openWait;
+	APP_SETTING setting;
 	vector<wstring> recFolderList;
-	vector<NW_SEND_INFO> setUdpSendList;
-	vector<NW_SEND_INFO> setTcpSendList;
 
 	wstring iniBonDriver;
 	BOOL iniMin;
@@ -85,17 +64,21 @@ protected:
 	BOOL iniNetwork;
 	BOOL iniUDP;
 	BOOL iniTCP;
+	int iniONID;
+	int iniTSID;
+	int iniSID;
 
 	CBonCtrl bonCtrl;
 	CPipeServer pipeServer;
-	int outCtrlID;
 	vector<DWORD> cmdCtrlList;
-	CMD_STREAM* cmdCapture;
-	CMD_STREAM* resCapture;
+	const CCmdStream* cmdCapture;
+	CCmdStream* resCapture;
 
+	recursive_mutex_ statusInfoLock;
+	VIEW_APP_STATUS_INFO statusInfo;
+
+	//サービス一覧の表示と同期する。ただしこのリストには非表示サービスも含む
 	vector<CH_DATA4> serviceList;
-	WORD lastONID;
-	WORD lastTSID;
 	DWORD recCtrlID;
 	vector<NW_SEND_INFO> udpSendList;
 	vector<NW_SEND_INFO> tcpSendList;
@@ -105,6 +88,7 @@ protected:
 	// 生成された、メッセージ割り当て関数
 	BOOL OnInitDialog();
 	afx_msg void OnSysCommand(UINT nID, LPARAM lParam, BOOL* pbProcessed);
+	static BOOL CALLBACK CloseViewWindowsProc(HWND hwnd, LPARAM lParam);
 	afx_msg void OnDestroy();
 	afx_msg void OnTimer(UINT_PTR nIDEvent);
 	afx_msg void OnSize(UINT nType, int cx, int cy);

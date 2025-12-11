@@ -196,6 +196,7 @@ namespace EpgTimer
             {
                 key.andKey = comboBox_andKey.Text;
                 key.notKey = comboBox_notKey.Text;
+                key.note = textBox_note.Text.Trim();
                 key.regExpFlag = checkBox_regExp.IsChecked == true ? 1 : 0;
                 key.aimaiFlag = (byte)(checkBox_aimai.IsChecked == true ? 1 : 0);
                 key.titleOnlyFlag = checkBox_titleOnly.IsChecked == true ? 1 : 0;
@@ -203,7 +204,7 @@ namespace EpgTimer
                 key.keyDisabledFlag = (byte)(checkBox_keyDisabled.IsChecked == true ? 1 : 0);
                 key.contentList = listBox_content.Items.OfType<ContentKindInfo>().Select(info => info.Data).DeepClone();
                 key.notContetFlag = (byte)(checkBox_notContent.IsChecked == true ? 1 : 0);
-                key.serviceList = serviceList.Where(info => info.IsSelected == true).Select(info => (Int64)info.Key).ToList();
+                key.serviceList = serviceList.Where(info => info.IsSelected == true).Select(info => (long)info.Key).ToList();
                 key.dateList = listBox_date.Items.OfType<DateItem>().Select(info => info.DateInfo).ToList();
                 key.notDateFlag = (byte)(checkBox_notDate.IsChecked == true ? 1 : 0);
                 key.freeCAFlag = (byte)Math.Min(Math.Max(comboBox_free.SelectedIndex, 0), 2);
@@ -236,6 +237,7 @@ namespace EpgTimer
                     comboBox_andKey.Text = key.andKey;
                     comboBox_notKey.Text = key.notKey;
                 }
+                textBox_note.Text = key.note;
                 checkBox_regExp.IsChecked = key.regExpFlag == 1;
                 checkBox_aimai.IsChecked = key.aimaiFlag == 1;
                 checkBox_titleOnly.IsChecked = key.titleOnlyFlag == 1;

@@ -101,11 +101,11 @@ namespace EpgTimer
         {
             return CommonManager.ConvertDurationText(durationSecond, Settings.Instance.ResInfoNoDurSecond);
         }
-        public virtual UInt32 DurationValue
+        public virtual uint DurationValue
         {
             get
             {
-                if (EventInfo == null || EventInfo.DurationFlag == 0) return UInt32.MinValue;
+                if (EventInfo == null || EventInfo.DurationFlag == 0) return uint.MinValue;
                 //
                 return EventInfo.durationSec;
             }
@@ -120,7 +120,7 @@ namespace EpgTimer
                 if (EventInfo == null) return "";
                 //詳細情報しか持ってないイベントはそれを表示する。文字数は基本情報に合わせて80字。
                 var s1 = EventInfo.ShortInfo == null ? "" : EventInfo.ShortInfo.text_char;
-                var s2 = EventInfo.ExtInfo == null ? "" : EventInfo.ExtInfo.text_char;
+                var s2 = EventInfo.ExtInfo == null ? "" : CommonManager.TrimHyphenSpace(EventInfo.ExtInfo.text_char);
                 return (s1 + " " + s2.Substring(0, Math.Min(Math.Max(0, 80 - s1.Length), s2.Length))).Trim().Replace("\r\n", " ");
             }
         }
@@ -257,16 +257,20 @@ namespace EpgTimer
                 return reserveTuner;
             }
         }
-        private string _estimatedRecSize;
+        private double _estimatedRecSize = -1;
         public string EstimatedRecSize
+        {
+            get { return EstimatedRecSizeValue <= 0 ? "" : _estimatedRecSize.ToString("0.0 GB"); }
+        }
+        public double EstimatedRecSizeValue
         {
             get
             {
-                if (ReserveInfo == null) return "";
+                if (ReserveInfo == null) return -1;
                 //
-                if (_estimatedRecSize == null)
+                if (_estimatedRecSize < 0)
                 {
-                    _estimatedRecSize = "";
+                    _estimatedRecSize = 0;
                     if (ReserveInfo.IsWatchMode == false)
                     {
                         int bitrate = 0;
@@ -278,7 +282,7 @@ namespace EpgTimer
                             bitrate = IniFileHandler.GetPrivateProfileInt("BITRATE", key, 0, SettingPath.BitrateIniPath);
                             bitrate = bitrate <= 0 && i == 3 ? 19456 : bitrate;
                         }
-                        _estimatedRecSize = ((double)Math.Max(bitrate / 8 * 1000 * ReserveInfo.DurationActual, 0) / 1024 / 1024 / 1024).ToString("0.0 GB");
+                        _estimatedRecSize = (double)Math.Max(bitrate / 8 * 1000 * ReserveInfo.DurationActual, 0) / 1024 / 1024 / 1024;
                     }
                 }
                 return _estimatedRecSize;
@@ -293,11 +297,11 @@ namespace EpgTimer
                 return CustomTimeFormat(ReserveInfo.StartMarginResActual * -1);
             }
         }
-        public override Double MarginStartValue
+        public override double MarginStartValue
         {
             get
             {
-                if (ReserveInfo == null) return Double.MinValue;
+                if (ReserveInfo == null) return double.MinValue;
                 //
                 return CustomMarginValue(ReserveInfo.StartMarginResActual * -1);
             }
@@ -311,18 +315,18 @@ namespace EpgTimer
                 return CustomTimeFormat(ReserveInfo.EndMarginResActual);
             }
         }
-        public override Double MarginEndValue
+        public override double MarginEndValue
         {
             get
             {
-                if (ReserveInfo == null) return Double.MinValue;
+                if (ReserveInfo == null) return double.MinValue;
                 //
                 return CustomMarginValue(ReserveInfo.EndMarginResActual);
             }
         }
         public override string ConvertInfoText(object param = null)
         {
-            return CommonManager.ConvertProgramText(this, EventInfoTextMode.All).TrimEnd('\r', '\n');
+            return CommonManager.ConvertProgramText(EventInfo).TrimEnd();
         }
         public virtual string Status
         {
@@ -335,7 +339,7 @@ namespace EpgTimer
                         string ret = new ReserveItem(ReserveInfo).Status;
                         return ret != "" ? ret : ReserveInfo.IsWatchMode ? "視" : "予";
                     }
-                    if (MenuUtil.GetRecFileInfo(EventInfo) != null)
+                    if (EventInfo.GetRecinfoFromPgUID() != null)
                     {
                         return "済";//放映中でも「済」なら優先する
                     }
@@ -366,7 +370,7 @@ namespace EpgTimer
                     {
                         idx = 2;
                     }
-                    else if (MenuUtil.GetRecFileInfo(EventInfo) != null)
+                    else if (EventInfo.GetRecinfoFromPgUID() != null)
                     {
                         idx = 4;//色は放映中を優先する
                     }
@@ -446,11 +450,11 @@ namespace EpgTimer
         }
         public static void SetReserveData(this ICollection<SearchItem> list)
         {
-            var listKeys = new Dictionary<UInt64, SearchItem>();
+            var listKeys = new Dictionary<ulong, SearchItem>();
             var delList = new List<SearchItem>();
             foreach (SearchItem item in list)
             {
-                UInt64 key = item.EventInfo.CurrentPgUID();
+                ulong key = item.EventInfo.CurrentPgUID();
                 if (listKeys.ContainsKey(key) == true)
                 {
                     delList.Add(item);

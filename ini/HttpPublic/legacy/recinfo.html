@@ -1,16 +1,11 @@
 -- vim:set ft=lua:
-PAGE_COUNT=50
-
 dofile(mg.script_name:gsub('[^\\/]*$','')..'util.lua')
 
 ct=CreateContentBuilder(GZIP_THRESHOLD_BYTE)
-ct:Append([=[
-<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd">
+ct:Append(DOCTYPE_HTML4_STRICT..[=[
 <html lang="ja">
 <head>
-<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
-<meta name="viewport" content="initial-scale=1">
-<link rel="stylesheet" type="text/css" href="default.css">
+]=]..DefaultHeadContents()..[=[
 <title>録画済み一覧 - EDCB</title>
 </head>
 <body>
@@ -18,17 +13,40 @@ ct:Append([=[
 <div class="page-nav">
   ]=])
 
+focus=nil
+post=AssertPost()
+if post then
+  focus=edcb.GetRecFileInfoBasic(GetVarInt(post,'del') or 0)
+  if focus then
+    edcb.DelRecFileInfo(focus.id)
+    ct:Append('  <div id="result">削除しました</div>\n')
+  end
+end
+
 edcb.htmlEscape=15
 a=edcb.GetRecFileInfoBasic()
+if not focus then
+  focus=GetVarInt(mg.request_info.query_string,'id')
+  focus=focus and BinarySearch(a,{id=focus},CompareFields('id'))
+end
+
 table.sort(a, function(a,b) return os.time(a.startTime) > os.time(b.startTime) end)
-page=GetVarInt(mg.request_info.query_string,'page',0,(#a-1)/PAGE_COUNT) or 0
+pageCount=RECINFO_PAGE_COUNT
+if focus then
+  --focusの行を含むページを探す
+  focusIndex=BinarySearchBound(a,focus,function(a,b) return os.time(a.startTime)>os.time(b.startTime) end)
+  page=math.floor(math.max(math.min(focusIndex-1,#a-1),0)/pageCount)
+else
+  page=GetVarInt(mg.request_info.query_string,'page',0,(#a-1)/pageCount) or 0
+end
+
 pageNav=''
-if #a>PAGE_COUNT then
-  for i=math.max(page-1,1),math.min(math.max(page-1,1)+6,(#a+PAGE_COUNT-1)/PAGE_COUNT) do
-    pageNav=pageNav..(i-1==page and ((i-1)*PAGE_COUNT+1)..'～ ' or '<a href="recinfo.html?page='..(i-1)..'">'..((i-1)*PAGE_COUNT+1)..'～</a> ')
+if #a>pageCount then
+  for i=math.max(page-1,1),math.min(math.max(page-1,1)+6,(#a+pageCount-1)/pageCount) do
+    pageNav=pageNav..(i-1==page and ((i-1)*pageCount+1)..'～ ' or '<a href="recinfo.html?page='..(i-1)..'">'..((i-1)*pageCount+1)..'～</a> ')
   end
   pageNav=(page==0 and '|&lt;&lt; ' or '<a href="recinfo.html">|&lt;&lt;</a> ')..pageNav
-    ..(page==math.floor((#a-1)/PAGE_COUNT) and '&gt;&gt;|' or '<a href="recinfo.html?page='..math.floor((#a-1)/PAGE_COUNT)..'">&gt;&gt;|</a>\n')
+    ..(page==math.floor((#a-1)/pageCount) and '&gt;&gt;|' or '<a href="recinfo.html?page='..math.floor((#a-1)/pageCount)..'">&gt;&gt;|</a>\n')
 end
 ct:Append(pageNav)
 ct:Append([=[
@@ -37,7 +55,7 @@ ct:Append([=[
   <table>
 ]=])
 
-for i=page*PAGE_COUNT+1,math.min(#a,(page+1)*PAGE_COUNT) do
+for i=page*pageCount+1,math.min(#a,(page+1)*pageCount) do
   v=a[i]
   ct:Append('    <tr><td><a href="recinfodesc.html?id='..v.id..'">'
     ..FormatTimeAndDuration(v.startTime, v.durationSecond)
@@ -62,4 +80,4 @@ ct:Append([=[
 </html>
 ]=])
 ct:Finish()
-mg.write(ct:Pop(Response(200,'text/html','utf-8',ct.len)..(ct.gzip and 'Content-Encoding: gzip\r\n' or '')..'\r\n'))
+mg.write(ct:Pop(Response(200,'text/html','utf-8',ct.len,ct.gzip)..'\r\n'))

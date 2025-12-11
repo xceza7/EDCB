@@ -7,7 +7,11 @@
 #include "../../Common/ErrDef.h"
 #include "../../Common/InstanceManager.h"
 
+#ifdef _WIN32
 #define DLL_EXPORT extern "C" __declspec(dllexport)
+#else
+#define DLL_EXPORT extern "C"
+#endif
 
 namespace
 {
@@ -29,6 +33,7 @@ DWORD WINAPI InitializeEP(
 	DWORD* id
 	)
 {
+	(void)asyncFlag;
 	if (id == NULL) {
 		return ERR_INVALID_ARG;
 	}
@@ -103,11 +108,12 @@ DWORD WINAPI AddTSPacketEP(
 }
 
 //解析データの現在のストリームＩＤを取得する
+//古い（EnumEpgInfoListEPが追加される以前の）バージョンでoriginalNetworkIDをNULLにしてはいけない
 //戻り値：
 // エラーコード
 //引数：
 // id						[IN]識別ID
-// originalNetworkID		[OUT]現在のoriginalNetworkID
+// originalNetworkID		[OUT]現在のoriginalNetworkID。NULL可
 // transportStreamID		[OUT]現在のtransportStreamID
 DLL_EXPORT
 DWORD WINAPI GetTSIDEP(
@@ -120,7 +126,7 @@ DWORD WINAPI GetTSIDEP(
 	if (ptr == NULL) {
 		return ERR_NOT_INIT;
 	}
-	if (originalNetworkID == NULL || transportStreamID == NULL) {
+	if (transportStreamID == NULL) {
 		return ERR_INVALID_ARG;
 	}
 
@@ -227,8 +233,8 @@ DWORD WINAPI EnumEpgInfoListEP(
 	WORD originalNetworkID,
 	WORD transportStreamID,
 	WORD serviceID,
-	BOOL (CALLBACK *enumEpgInfoListEPProc)(DWORD epgInfoListSize, EPG_EVENT_INFO* epgInfoList, LPVOID param),
-	LPVOID param
+	BOOL (CALLBACK *enumEpgInfoListEPProc)(DWORD epgInfoListSize, EPG_EVENT_INFO* epgInfoList, void* param),
+	void* param
 	)
 {
 	std::shared_ptr<CEpgDataCap3Main> ptr = g_instMng.find(id);
@@ -409,8 +415,8 @@ void WINAPI SetLogoTypeFlagsEP(
 DLL_EXPORT
 DWORD WINAPI EnumLogoListEP(
 	DWORD id,
-	BOOL (CALLBACK *enumLogoListProc)(DWORD logoListSize, const LOGO_INFO* logoList, LPVOID param),
-	LPVOID param
+	BOOL (CALLBACK *enumLogoListProc)(DWORD logoListSize, const LOGO_INFO* logoList, void* param),
+	void* param
 	)
 {
 	std::shared_ptr<CEpgDataCap3Main> ptr = g_instMng.find(id);
@@ -455,7 +461,7 @@ DWORD WINAPI SetDebugLogCallbackEP(
 	void (CALLBACK *debugLogProc)(const WCHAR* s)
 	)
 {
-	CBlockLock lock(&g_debugLogLock);
+	lock_recursive_mutex lock(g_debugLogLock);
 
 	if (debugLogProc) {
 		g_debugLogProc = debugLogProc;
@@ -474,10 +480,12 @@ DWORD WINAPI SetDebugLogCallbackEP(
 void AddDebugLogNoNewline(const wchar_t* s)
 {
 	{
-		CBlockLock lock(&g_debugLogLock);
+		lock_recursive_mutex lock(g_debugLogLock);
 		if (g_debugLogProc) {
 			g_debugLogProc(s);
 		}
 	}
+#ifdef _WIN32
 	OutputDebugString(s);
+#endif
 }

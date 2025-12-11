@@ -5,7 +5,10 @@
 #define CONNECT_TIMEOUT 15*1000
 
 //パイプ名
+//"Pipe"を"Connect"に置換した名前のイベントオブジェクトが接続時の勧告ロックとして使われる
+//ただし"NoWaitPipe"の場合、クライアントはこのイベントオブジェクトを無視すること(接続は必ずしも成功しない)
 #define CMD2_EPG_SRV_PIPE L"EpgTimerSrvPipe"
+#define CMD2_EPG_SRV_NOWAIT_PIPE L"EpgTimerSrvNoWaitPipe"
 #define CMD2_GUI_CTRL_PIPE L"EpgTimerGUI_Ctrl_BonPipe_" //+プロセスID
 #define CMD2_VIEW_CTRL_PIPE L"View_Ctrl_BonPipe_" //+プロセスID
 #define CMD2_TVTEST_CTRL_PIPE L"TvTest_Ctrl_BonPipe_" //+プロセスID
@@ -17,15 +20,19 @@
 #define CMD_VER 5 //予定ファイル名追加
 
 //コマンド
+//コメントはコマンド送信側視点で、送信側の目的または受信側の動作を説明する
 #define CMD2_EPG_SRV_ADDLOAD_RESERVE		1 //Program.txtの追加読み込み（廃止）
-#define CMD2_EPG_SRV_RELOAD_EPG				2 //EPG再読み込み
-#define CMD2_EPG_SRV_RELOAD_SETTING			3 //設定の再読み込み
-#define CMD2_EPG_SRV_CLOSE					4 //アプリケーションの終了（CreateProcessで普通に起動した場合に使用）
-#define CMD2_EPG_SRV_REGIST_GUI				5 //GUIアプリケーションのパイプ名と接続待機用イベント名を登録（タイマーGUI用のコマンドが飛ぶようになる）
-#define CMD2_EPG_SRV_UNREGIST_GUI			6 //GUIアプリケーションのパイプ名と接続待機用イベント名の登録を解除
-#define CMD2_EPG_SRV_REGIST_GUI_TCP			7 //TCP接続のGUIアプリケーションのIPとポートを登録（タイマーGUI用のコマンドが飛ぶようになる）
-#define CMD2_EPG_SRV_UNREGIST_GUI_TCP		8 //TCP接続のGUIアプリケーションのIPとポートの登録を解除
-#define CMD2_EPG_SRV_ISREGIST_GUI_TCP		9 //TCP接続のGUIアプリケーションのIPとポートの登録状況確認
+#define CMD2_EPG_SRV_RELOAD_EPG				2 //EPG再読み込みを開始する
+#define CMD2_EPG_SRV_RELOAD_SETTING			3 //設定情報を再読み込みする
+#define CMD2_EPG_SRV_CLOSE					4 //サービスや常駐モードでなければアプリケーションを終了する
+#define CMD2_EPG_SRV_REGIST_GUI				5 //EpgTimerSrvのパイプ接続GUIとしてプロセスを登録する（通知が受信可能になる）
+#define CMD2_EPG_SRV_UNREGIST_GUI			6 //EpgTimerSrvのパイプ接続GUI登録を解除する
+#define CMD2_EPG_SRV_REGIST_GUI_TCP			7 //TCP接続のGUIアプリケーションのIPと通知受信用ポートを登録
+#define CMD2_EPG_SRV_UNREGIST_GUI_TCP		8 //TCP接続のGUIアプリケーションのIPと通知受信用ポートの登録を解除
+#define CMD2_EPG_SRV_ISREGIST_GUI_TCP		9 //TCP接続のGUIアプリケーションのIPと通知受信用ポートの登録状況確認
+
+//特別な応答を返すコマンド
+#define CMD2_EPG_SRV_RELAY_VIEW_STREAM		301 //ViewアプリのSrvPipeストリームを転送する
 
 #define CMD2_EPG_SRV_ENUM_RESERVE			1011 //予約一覧取得
 #define CMD2_EPG_SRV_GET_RESERVE			1012 //予約情報取得
@@ -68,6 +75,8 @@
 #define CMD2_EPG_SRV_GET_PG_INFO_LIST		1024 //番組情報取得(指定IDリスト)
 #define CMD2_EPG_SRV_SEARCH_PG				1025 //番組検索
 #define CMD2_EPG_SRV_ENUM_PG_ALL			1026 //番組情報一覧取得
+#define CMD2_EPG_SRV_GET_PG_INFO_MINMAX		1028 //番組情報の最小開始時間と最大開始時間を取得する
+#define CMD2_EPG_SRV_ENUM_PG_INFO_EX		1029 //サービス指定と時間指定で番組情報一覧を取得する
 #define CMD2_EPG_SRV_ENUM_PG_ARC			1030 //サービス指定と時間指定で過去番組情報一覧を取得する
 
 #define CMD2_EPG_SRV_ENUM_AUTO_ADD			1031 //自動予約登録の条件一覧取得
@@ -91,10 +100,13 @@
 #define CMD2_EPG_SRV_GET_CHG_CH_TVTEST		1062 //TVTestのチャンネル切り替え用の情報を取得する
 #define CMD2_EPG_SRV_PROFILE_UPDATE			1063 //設定ファイル(ini)の更新を通知させる
 #define CMD2_EPG_SRV_GET_NOTIFY_LOG			1065 //保存された情報通知ログを取得する
+#define CMD2_EPG_SRV_ENUM_TUNER_PROCESS		1066 //起動中のチューナーについてサーバーが把握している情報の一覧を取得する
 
-#define CMD2_EPG_SRV_NWTV_SET_CH			1070 //ネットワークモードのEpgDataCap_Bonのチャンネルを切り替え
-#define CMD2_EPG_SRV_NWTV_CLOSE				1071 //ネットワークモードで起動中のEpgDataCap_Bonを終了
-#define CMD2_EPG_SRV_NWTV_MODE				1072 //ネットワークモードで起動するときのモード（1:UDP 2:TCP 3:UDP+TCP）
+#define CMD2_EPG_SRV_NWTV_SET_CH			1070 //NetworkTVモードのViewアプリのチャンネルを切り替え（ID=0のみ）
+#define CMD2_EPG_SRV_NWTV_CLOSE				1071 //NetworkTVモードで起動中のViewアプリを終了（ID=0のみ）
+#define CMD2_EPG_SRV_NWTV_MODE				1072 //NetworkTVモードで起動するときの送信モード（1:UDP 2:TCP 3:UDP+TCP）
+#define CMD2_EPG_SRV_NWTV_ID_SET_CH			1073 //NetworkTVモードのViewアプリのチャンネルを切り替え、または起動の確認（ID指定）
+#define CMD2_EPG_SRV_NWTV_ID_CLOSE			1074 //NetworkTVモードで起動中のViewアプリを終了（ID指定）
 
 #define CMD2_EPG_SRV_NWPLAY_OPEN			1080 //ストリーム配信用ファイルを開く
 #define CMD2_EPG_SRV_NWPLAY_CLOSE			1081 //ストリーム配信用ファイルを閉じる
@@ -108,22 +120,22 @@
 //外部アプリ再生用
 #define CMD2_EPG_SRV_GET_NETWORK_PATH		1299 //録画ファイルのネットワークパスを取得
 
-//タイマーGUI（EpgTimer_Bon.exe）用
+//タイマーGUI（EpgTimerなど）用
 #define CMD2_TIMER_GUI_SHOW_DLG				101 //ダイアログを前面に表示
-#define CMD2_TIMER_GUI_UPDATE_RESERVE		102 //予約一覧の情報が更新された
-#define CMD2_TIMER_GUI_UPDATE_EPGDATA		103 //EPGデータの再読み込みが完了した
-#define CMD2_TIMER_GUI_VIEW_EXECUTE			110 //Viewアプリ（EpgDataCap_Bon.exe）を起動
-#define CMD2_TIMER_GUI_QUERY_SUSPEND		120 //スタンバイ、休止、シャットダウンに入っていいかの確認をユーザーに行う（入っていいならCMD_EPG_SRV_SUSPENDを送る）
-#define CMD2_TIMER_GUI_QUERY_REBOOT			121 //PC再起動に入っていいかの確認をユーザーに行う（入っていいならCMD_EPG_SRV_REBOOTを送る）
-#define CMD2_TIMER_GUI_SRV_STATUS_CHG		130 //サーバーのステータス変更通知（1:通常、2:EPGデータ取得開始、3:予約録画開始）
+#define CMD2_TIMER_GUI_UPDATE_RESERVE		102 //予約情報などが更新されたことを通知する（旧仕様との互換用）
+#define CMD2_TIMER_GUI_UPDATE_EPGDATA		103 //EPGデータが更新されたことを通知する（旧仕様との互換用）
+#define CMD2_TIMER_GUI_VIEW_EXECUTE			110 //Viewアプリ（EpgDataCap_Bonなど）を起動
+#define CMD2_TIMER_GUI_QUERY_SUSPEND		120 //スタンバイ、休止、シャットダウンに入っていいかユーザーに確認する（了解ならタイマーGUIはCMD_EPG_SRV_SUSPENDを送る）
+#define CMD2_TIMER_GUI_QUERY_REBOOT			121 //PC再起動に入っていいかユーザーに確認する（了解ならタイマーGUIはCMD_EPG_SRV_REBOOTを送る）
+#define CMD2_TIMER_GUI_SRV_STATUS_CHG		130 //サーバーの動作状況の変更を通知する（旧仕様との互換用）（1:通常、2:EPGデータ取得開始、3:予約録画開始）
 
 //バージョン情報追加対応版
-#define CMD2_TIMER_GUI_SRV_STATUS_NOTIFY2	1130 //サーバーの情報変更通知
+#define CMD2_TIMER_GUI_SRV_STATUS_NOTIFY2	1130 //サーバーの情報変更を通知する
 
-//Viewアプリ（EpgDataCap_Bon.exe）用
+//Viewアプリ（EpgDataCap_Bonなど）用
 #define CMD2_VIEW_APP_SET_BONDRIVER			201 //BonDriverの切り替え
 #define CMD2_VIEW_APP_GET_BONDRIVER			202 //使用中のBonDriverのファイル名を取得
-#define CMD2_VIEW_APP_SET_CH				205 //SpaceとCh or OriginalNetworkID、TSID、ServieIDでチャンネル切り替え
+#define CMD2_VIEW_APP_SET_CH				205 //チャンネル切り替え（SpaceとCh or OriginalNetworkID、TSID、ServieID）
 #define CMD2_VIEW_APP_GET_DELAY				206 //放送波の時間とPC時間の誤差取得
 #define CMD2_VIEW_APP_GET_STATUS			207 //現在の状態を取得
 #define CMD2_VIEW_APP_CLOSE					208 //アプリケーションの終了
@@ -131,6 +143,7 @@
 #define CMD2_VIEW_APP_GET_ID				1202 //識別用IDの取得
 #define CMD2_VIEW_APP_SET_STANDBY_REC		1203 //予約録画用にGUIキープ
 #define CMD2_VIEW_APP_EXEC_VIEW_APP			1204 //Viewボタン登録アプリの起動
+#define CMD2_VIEW_APP_GET_STATUS_DETAILS	1205 //現在の状態を詳細に取得
 #define CMD2_VIEW_APP_CREATE_CTRL			1221 //ストリーム制御用コントロール作成
 #define CMD2_VIEW_APP_DELETE_CTRL			1222 //ストリーム制御用コントロール削除
 #define CMD2_VIEW_APP_SET_CTRLMODE			1223 //コントロールの動作を設定（対象サービス、スクランブル、処理対象データ）
@@ -141,7 +154,7 @@
 #define CMD2_VIEW_APP_REC_WRITE_SIZE		1228 //ファイル出力したサイズを取得
 #define CMD2_VIEW_APP_EPGCAP_START			1241 //EPG取得開始
 #define CMD2_VIEW_APP_EPGCAP_STOP			1242 //EPG取得停止
-#define CMD2_VIEW_APP_SEARCH_EVENT			1251 //EPG情報の検索
+#define CMD2_VIEW_APP_SEARCH_EVENT			1251 //番組情報の検索
 #define CMD2_VIEW_APP_GET_EVENT_PF			1252 //現在or次の番組情報を取得する
 //TVTest連携のストリーミング配信専用
 #define CMD2_VIEW_APP_TT_SET_CTRL			1261 //ストリーミング配信制御IDの設定

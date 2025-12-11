@@ -7,7 +7,7 @@ using System.Windows.Controls;
 namespace EpgTimer
 {
     using EpgView;
-    using ComboItem = KeyValuePair<UInt64, string>;
+    using ComboItem = KeyValuePair<ulong, string>;
 
     /// <summary>
     /// EpgWeekMainView.xaml の相互作用ロジック
@@ -56,6 +56,22 @@ namespace EpgTimer
             return time.AddHours(-viewInfo.StartTimeWeek).Date;
         }
 
+        /// <summary>サービスロゴの再描画</summary>
+        protected override void ReloadServiceLogo()
+        {
+            int idx = comboBox_service.SelectedIndex;
+            if (idx < 0) return;
+            if(Settings.Instance.ShowLogo)
+            {
+                image_Logo.Source = serviceListOrderAdjust[idx].Logo;
+                image_Logo.Width = 64;
+            }
+            else
+            {
+                image_Logo.Source = null;
+                image_Logo.Width = 0; //隙間調整もあるので非表示にはしない。
+            }
+        }
         /// <summary>予約情報の再描画</summary>
         protected override void ReloadReserveViewItem()
         {
@@ -64,7 +80,7 @@ namespace EpgTimer
                 reserveList.Clear();
                 recinfoList.Clear();
 
-                UInt64 selectID = GetSelectID(true);
+                ulong selectID = GetSelectID(true);
                 foreach (ReserveData info in CombinedReserveList())
                 {
                     if (selectID == info.Create64Key())
@@ -118,7 +134,7 @@ namespace EpgTimer
                 ReDrawNowLine();
                 dayList.Clear();
 
-                UInt64 selectID = GetSelectID(true);
+                ulong selectID = GetSelectID(true);
                 if (selectID == 0) return;
 
                 //リストの作成
@@ -164,11 +180,12 @@ namespace EpgTimer
         private void comboBox_service_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
             if (serviceChanging == true) return;
+            ReloadServiceLogo();
             UpdateProgramView();
             ReloadReserveViewItem();
             UpdateStatus();
         }
-        private UInt64 GetSelectID(bool alternativeSelect = false)
+        private ulong GetSelectID(bool alternativeSelect = false)
         {
             var idx = comboBox_service.SelectedIndex;
             if (idx < 0)
@@ -176,13 +193,13 @@ namespace EpgTimer
                 if (alternativeSelect == false || comboBox_service.Items.Count == 0) return 0;
                 idx = 0;
             }
-            return (UInt64)comboBox_service.SelectedValue;
+            return (ulong)comboBox_service.SelectedValue;
         }
 
         //実際には切り替えないと分からない
-        public override int MoveToItem(UInt64 id, JumpItemStyle style = JumpItemStyle.MoveTo, bool dryrun = false)
+        public override int MoveToItem(ulong id, JumpItemStyle style = JumpItemStyle.MoveTo, bool dryrun = false)
         {
-            UInt64 key = CommonManager.Reverse64Key(id);
+            ulong key = CommonManager.Reverse64Key(id);
             if (dryrun == true) return viewData.HasKey(key) ? 1 : -1;
             if (key != 0) ChangeViewService(key);
             return base.MoveToItem(id, style, dryrun);
@@ -205,10 +222,10 @@ namespace EpgTimer
             if (target != null) ChangeViewService(target.Create64Key());
             return base.MoveToRecInfoItem(target, style);
         }
-        protected void ChangeViewService(UInt64 id)
+        protected void ChangeViewService(ulong id)
         {
             var target = comboBox_service.Items.OfType<ComboItem>().FirstOrDefault(item => item.Key == id);
-            if (target.Key != default(UInt64)) comboBox_service.SelectedItem = target;
+            if (target.Key != default(ulong)) comboBox_service.SelectedItem = target;
         }
     }
 }

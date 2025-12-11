@@ -1,18 +1,16 @@
 -- vim:set ft=lua:
-PAGE_COUNT=50
-
 dofile(mg.script_name:gsub('[^\\/]*$','')..'util.lua')
+if USE_LIVEJK then
+  dofile(mg.script_name:gsub('[^\\/]*$','')..'jkconst.lua')
+end
 
 vtag=GetVarInt(mg.request_info.query_string,'vtag') or -1
 
 ct=CreateContentBuilder(GZIP_THRESHOLD_BYTE)
-ct:Append([=[
-<!DOCTYPE HTML]=]..(vtag<=0 and ' PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd"' or '')..[=[>
+ct:Append((vtag<=0 and DOCTYPE_HTML4_STRICT or '<!DOCTYPE html>\n')..[=[
 <html lang="ja">
 <head>
-<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
-<meta name="viewport" content="initial-scale=1">
-<link rel="stylesheet" type="text/css" href="default.css">
+]=]..DefaultHeadContents()..[=[
 <title>予約一覧 - EDCB</title>
 </head>
 <body>
@@ -20,17 +18,40 @@ ct:Append([=[
 <div class="page-nav">
   ]=])
 
+focus=nil
+post=AssertPost()
+if post then
+  focus=edcb.GetReserveData(GetVarInt(post,'del') or 0)
+  if focus then
+    edcb.DelReserveData(focus.reserveID)
+    ct:Append('  <div id="result">削除しました</div>\n')
+  end
+end
+
 edcb.htmlEscape=15
 a=edcb.GetReserveData()
+if not focus then
+  focus=GetVarInt(mg.request_info.query_string,'id')
+  focus=focus and BinarySearch(a,{reserveID=focus},CompareFields('reserveID'))
+end
+
 table.sort(a, function(a,b) return os.time(a.startTime) < os.time(b.startTime) end)
-page=GetVarInt(mg.request_info.query_string,'page',0,(#a-1)/PAGE_COUNT) or 0
+pageCount=RESERVE_PAGE_COUNT
+if focus then
+  --focusの行を含むページを探す
+  focusIndex=BinarySearchBound(a,focus,function(a,b) return os.time(a.startTime)<os.time(b.startTime) end)
+  page=math.floor(math.max(math.min(focusIndex-1,#a-1),0)/pageCount)
+else
+  page=GetVarInt(mg.request_info.query_string,'page',0,(#a-1)/pageCount) or 0
+end
+
 pageNav=''
-if #a>PAGE_COUNT then
-  for i=math.max(page-1,1),math.min(math.max(page-1,1)+6,(#a+PAGE_COUNT-1)/PAGE_COUNT) do
-    pageNav=pageNav..(i-1==page and ((i-1)*PAGE_COUNT+1)..'～ ' or '<a href="reserve.html?page='..(i-1)..'">'..((i-1)*PAGE_COUNT+1)..'～</a> ')
+if #a>pageCount then
+  for i=math.max(page-1,1),math.min(math.max(page-1,1)+6,(#a+pageCount-1)/pageCount) do
+    pageNav=pageNav..(i-1==page and ((i-1)*pageCount+1)..'～ ' or '<a href="reserve.html?page='..(i-1)..'">'..((i-1)*pageCount+1)..'～</a> ')
   end
   pageNav=(page==0 and '|&lt;&lt; ' or '<a href="reserve.html">|&lt;&lt;</a> ')..pageNav
-    ..(page==math.floor((#a-1)/PAGE_COUNT) and '&gt;&gt;|' or '<a href="reserve.html?page='..math.floor((#a-1)/PAGE_COUNT)..'">&gt;&gt;|</a>\n')
+    ..(page==math.floor((#a-1)/pageCount) and '&gt;&gt;|' or '<a href="reserve.html?page='..math.floor((#a-1)/pageCount)..'">&gt;&gt;|</a>\n')
 end
 ct:Append(pageNav)
 ct:Append([=[
@@ -41,7 +62,7 @@ ct:Append([=[
 
 rsdef=(edcb.GetReserveData(0x7FFFFFFF) or {}).recSetting
 rate={}
-for i=page*PAGE_COUNT+1,math.min(#a,(page+1)*PAGE_COUNT) do
+for i=page*pageCount+1,math.min(#a,(page+1)*pageCount) do
   v=a[i]
   size=nil
   if (v.recSetting.recMode~=5 and v.recSetting.recMode or v.recSetting.noRecMode or 1)~=4 then
@@ -78,43 +99,43 @@ ct:Append([=[
 <div class="aside">
 ]=])
 a={}
-for i,v in ipairs(edcb.FindFile('\\\\.\\pipe\\SendTSTCP_*',0) or {}) do
-  n=v.name:match('^[^_]+_(%d+)_%d+$')
+for i,v in ipairs(edcb.FindFile(SendTSTCPPipePath('*',0),0) or {}) do
+  n=v.name:match('^[^_]+_(%d+)_%d+')
   if n then
     a[#a+1]=n
   end
 end
 if #a>0 then
-  n=mg.get_var(mg.request_info.query_string,'fname') or a[1]
-  audio2=GetVarInt(mg.request_info.query_string,'audio2')==1
-  dual=GetVarInt(mg.request_info.query_string,'dual',0,2)
-  cinema=GetVarInt(mg.request_info.query_string,'cinema')==1
+  n=mg.get_var(mg.request_info.query_string,'n') or a[1]
+  xq=GetTranscodeQueries(mg.request_info.query_string)
   ct:Append('視聴 →<a href="reserve.html?vtag='..(vtag==0 and '-1' or '0')
-    ..(audio2 and '&amp;audio2=1' or '')..(dual and '&amp;dual='..dual or '')..(cinema and '&amp;cinema=1' or '')
+    ..ConstructTranscodeQueries(xq)
     ..'#footer">'..(vtag==0 and 'Video' or 'DL')..'</a>\n'
-    ..'<form method="GET" action="'..(vtag==0 and 'view.lua' or 'reserve.html#footer')..'"><div>\n'
-    ..'<input type="submit" value="view.lua">\n'
+    ..'<form id="vid-form" action="'..(vtag==0 and 'view.lua' or 'reserve.html#footer')..'"><div>\n'
+    ..'<button type="submit">view</button>\n'
     ..'<select name="n">')
   for i,v in ipairs(a) do
     ct:Append('<option value="'..v..'"'..(n==v and ' selected' or '')..'>-pipe'..v)
   end
   ct:Append('</select>\n'
-    ..'<input type="checkbox" name="audio2" value="1"'..(audio2 and ' checked' or '')..'>audio2\n'
-    ..'<select name="dual">'
-    ..'<option value="0"'..(dual~=1 and dual~=2 and ' selected' or '')..'>*'
-    ..'<option value="1"'..(dual==1 and ' selected' or '')..'>dual-main'
-    ..'<option value="2"'..(dual==2 and ' selected' or '')..'>dual-sub'
-    ..'</select>\n'
-    ..'<input type="checkbox" name="cinema" value="1"'..(cinema and ' checked' or '')..'>cinema\n'
+    ..TranscodeSettingTemplate(xq,vtag==0)
     ..(vtag==0 and '<input type="hidden" name="ctok" value="'..CsrfToken('view.lua')..'">\n'
          or '<input type="hidden" name="vtag" value="1">\n')
     ..'</div></form>\n')
   if vtag==1 then
     for i,v in ipairs(a) do
       if n==v then
-        ct:Append('<video autoplay controls style="max-width:95%" src="view.lua?n='..v
-          ..(audio2 and '&amp;audio2=1' or '')..(dual and '&amp;dual='..dual or '')..(cinema and '&amp;cinema=1' or '')
-          ..'&amp;ctok='..CsrfToken('view.lua')..'">view.lua</video>\n')
+        src='view.lua?n='..v..ConstructTranscodeQueries(xq)..'&amp;ctok='..CsrfToken('view.lua')
+        ct:Append(VideoWrapperBegin()
+          ..(xq.tslive and '<canvas id="video" data-src="'..src..'"></canvas>' or
+               '<video id="video" autoplay playsinline controls '..(ALLOW_HLS and 'data-' or '')..'src="'..src..'">view</video>')
+          ..VideoWrapperEnd(USE_LIVEJK and GetChatStreamNameList())..'\n'..TranscodeScriptTemplate(true,xq.caption,xq.jikkyo,{n=v}))
+        if xq.tslive then
+          ct:Append(TsliveScriptTemplate(xq.autoCinema))
+        elseif ALLOW_HLS then
+          ct:Append(HlsScriptTemplate('view.lua'))
+        end
+        ct:Append('\n')
         break
       end
     end
@@ -124,7 +145,7 @@ ct:Append([=[
   <form method="POST" action="view.lua"><div>
     <input type="hidden" name="ctok" value="]=]..CsrfToken('view.lua')..[=[">
     <input type="hidden" name="n" value="-1">
-    <input type="submit" value="view.lua -term">
+    <button type="submit">view -term</button>
   </div></form>
 </div>
 <div id="footer">
@@ -134,4 +155,7 @@ ct:Append([=[
 </html>
 ]=])
 ct:Finish()
-mg.write(ct:Pop(Response(200,'text/html','utf-8',ct.len)..(ct.gzip and 'Content-Encoding: gzip\r\n' or '')..'\r\n'))
+mg.write(ct:Pop(Response(200,'text/html','utf-8',ct.len,ct.gzip)
+  ..'Cross-Origin-Embedder-Policy: require-corp\r\n'
+  ..'Cross-Origin-Opener-Policy: same-origin\r\n'
+  ..'\r\n'))

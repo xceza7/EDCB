@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Windows.Media;
 using System.Windows;
 using System.Windows.Controls;
 
@@ -49,6 +50,12 @@ namespace EpgTimer
             return (uint)(info.PgDurationSecond - (LimitedStart(info) - info.PgStartTime).TotalSeconds);
         }
 
+        /// <summary>サービスロゴの再描画</summary>
+        protected override void ReloadServiceLogo()
+        {
+            serviceView.RefreshLogo();
+        }
+
         /// <summary>予約情報の再描画</summary>
         protected override void ReloadReserveViewItem()
         {
@@ -56,6 +63,7 @@ namespace EpgTimer
             {
                 reserveList.Clear();
                 recinfoList.Clear();
+                timeView.ClearMarker();
 
                 var serviceReserveList = CombinedReserveList().ToLookup(data => data.Create64Key());
                 int mergePos = 0;
@@ -70,7 +78,7 @@ namespace EpgTimer
                         for (mergePos = i; mergePos + 1 < serviceEventList.Count; mergePos++)
                         {
                             EpgServiceInfo next = serviceEventList[mergePos + 1].serviceInfo;
-                            if (next.ONID != curr.ONID || next.TSID != curr.TSID || next.SID >= curr.SID)
+                            if (!viewInfo.CombineProgramByReverseSID || next.ONID != curr.ONID || next.TSID != curr.TSID || next.SID >= curr.SID)
                             {
                                 break;
                             }
@@ -101,6 +109,27 @@ namespace EpgTimer
                 }
 
                 epgProgramView.SetReserveList(dataItemList);
+
+                if (this.EpgStyle().ReserveRectShowMarker)
+                {
+                    var setList = dataItemList.Where(item => item.Data.IsEnabled).OrderBy(item => item.Data.StartTimeActual).ToList();
+                    var lists = new List<IEnumerable<ReserveViewItem>>
+                    {
+                        setList.Where(info => info.Data is ReserveDataEnd),
+                        setList.Where(info => !(info.Data is ReserveDataEnd) && info.Data.OverlapMode != 1 && info.Data.OverlapMode != 2),
+                        setList.Where(info => info.Data.OverlapMode == 1),
+                        setList.Where(info => info.Data.OverlapMode == 2)
+                    };
+                    for (int i = 0; i < lists.Count; i++)
+                    {
+                        if(lists[i].Any())
+                        {
+                            Brush brush = i != 1 ? lists[i].First().BorderBrush : this.EpgBrushCache().ResColorList[0];
+                            var timeRanges = lists[i].Select(info => new KeyValuePair<DateTime, TimeSpan>(info.Data.StartTimeActual, TimeSpan.FromSeconds(info.Data.DurationActual)));
+                            timeView.AddMarker(timeRanges, brush);
+                        }
+                    }
+                }
             }
             catch (Exception ex) { MessageBox.Show(ex.ToString()); }
         }
@@ -138,7 +167,7 @@ namespace EpgTimer
                         for (mergePos = i; mergePos + 1 < serviceEventList.Count; mergePos++)
                         {
                             EpgServiceInfo next = serviceEventList[mergePos + 1].serviceInfo;
-                            if (next.ONID != curr.ONID || next.TSID != curr.TSID || next.SID >= curr.SID)
+                            if (!viewInfo.CombineProgramByReverseSID || next.ONID != curr.ONID || next.TSID != curr.TSID || next.SID >= curr.SID)
                             {
                                 break;
                             }
@@ -154,7 +183,7 @@ namespace EpgTimer
                             {
                                 break;
                             }
-                            else if (next.SID < curr.SID)
+                            else if (viewInfo.CombineProgramByReverseSID && next.SID < curr.SID)
                             {
                                 spanCheckNum--;
                                 break;

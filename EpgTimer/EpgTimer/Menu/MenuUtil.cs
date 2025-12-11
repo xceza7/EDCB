@@ -18,16 +18,19 @@ namespace EpgTimer
         public static void CopyTitle2Clipboard(string Title, bool NotToggle = false)
         {
             Title = TrimKeywordCheckToggled(Title, Settings.Instance.MenuSet.CopyTitle_Trim, NotToggle);
-            Clipboard.SetDataObject(Title, true);
+            ToClipBoard(Title);
         }
 
         public static void CopyContent2Clipboard(EpgEventInfo eventInfo, bool NotToggle = false)
         {
-            bool setting = CheckShiftToggled(Settings.Instance.MenuSet.CopyContentBasic, NotToggle);
-            var mode = setting == true ? EventInfoTextMode.BasicOnly : EventInfoTextMode.All;
-            string text = CommonManager.ConvertProgramText(eventInfo, mode).TrimEnd();
-            if (text != "") text += "\r\n";
-            Clipboard.SetDataObject(text, true);
+            string text = CommonManager.ConvertProgramText(eventInfo, EventInfoTextMode.BasicInfo);
+            if (CheckShiftToggled(Settings.Instance.MenuSet.CopyContentBasic, NotToggle) == false)
+            {
+                text += CommonManager.ConvertProgramText(eventInfo, EventInfoTextMode.BasicText)
+                    + CommonManager.TrimHyphenSpace(CommonManager.ConvertProgramText(eventInfo, EventInfoTextMode.ExtendedText))
+                    + CommonManager.ConvertProgramText(eventInfo, EventInfoTextMode.PropertyInfo);
+            }
+            ToClipBoard(text.TrimEnd() + "\r\n");
         }
 
         public static void CopyContent2Clipboard(ReserveData resInfo, bool NotToggle = false)
@@ -41,14 +44,24 @@ namespace EpgTimer
             string text = "";
             if (recInfo != null)
             {
-                text = recInfo.ProgramInfo;
+                recInfo.ProgramInfoSet();
+
                 if (CheckShiftToggled(Settings.Instance.MenuSet.CopyContentBasic, NotToggle) == true)
                 {
-                    text = string.Join("\r\n", text.Replace("\r\n", "\n").Split('\n').Take(3));
+                    text = string.Join("\r\n", recInfo.ProgramInfo.Replace("\r\n", "\n").Split('\n').Take(3));
                 }
-                text = text.TrimEnd() + "\r\n";
+                else
+                {
+                    string[] parts = recInfo.GetProgramInfoParts();
+                    text = parts[0] + CommonManager.TrimHyphenSpace(parts[1]) + parts[2];
+                }
             }
-            Clipboard.SetDataObject(text, true);
+            ToClipBoard(text.TrimEnd() + "\r\n");
+        }
+
+        private static void ToClipBoard(string text)
+        {
+            try { Clipboard.SetDataObject(text, true); } catch { }
         }
 
         public static void SearchTextWeb(string KeyWord, bool? NotToggle = null)
@@ -439,6 +452,11 @@ namespace EpgTimer
             itemlist.ForEach(item => item.searchInfo.notKey = Clipboard.GetText());
             return AutoAddChange(itemlist);
         }
+        public static bool EpgAutoAddChangeNote(List<EpgAutoAddData> itemlist)
+        {
+            itemlist.ForEach(item => item.searchInfo.note = Clipboard.GetText());
+            return AutoAddChange(itemlist);
+        }
         public static bool AutoAddAdd(IEnumerable<AutoAddData> itemlist, bool cautionMany = true)
         {
             return AutoAddCmdSend(itemlist, 0, cautionMany: cautionMany);
@@ -750,7 +768,7 @@ namespace EpgTimer
             return true;
         }
 
-        public static bool? OpenEpgReserveDialog(EpgEventInfo Data, Int32 epgInfoOpenMode = 0, RecSettingData setInfo = null)
+        public static bool? OpenEpgReserveDialog(EpgEventInfo Data, int epgInfoOpenMode = 0, RecSettingData setInfo = null)
         {
             try
             {
@@ -764,13 +782,13 @@ namespace EpgTimer
             return null;
         }
 
-        public static bool? OpenChangeReserveDialog(UInt32 id, Int32 epgInfoOpenMode = 0)
+        public static bool? OpenChangeReserveDialog(uint id, int epgInfoOpenMode = 0)
         {
             ReserveData data;
             if (CommonManager.Instance.DB.ReserveList.TryGetValue(id, out data) == false) return false;
             return OpenChangeReserveDialog(data, epgInfoOpenMode);
         }
-        public static bool? OpenChangeReserveDialog(ReserveData Data, Int32 epgInfoOpenMode = 0)
+        public static bool? OpenChangeReserveDialog(ReserveData Data, int epgInfoOpenMode = 0)
         {
             if (ChgReserveWindow.ChangeDataLastUsedWindow(Data) != null) return true;
             return OpenChgReserveDialog(Data, epgInfoOpenMode);
@@ -779,7 +797,7 @@ namespace EpgTimer
         {
             return OpenChgReserveDialog(null, 0, setInfo);
         }
-        public static bool? OpenChgReserveDialog(ReserveData Data, Int32 epgInfoOpenMode = 0, RecSettingData setInfo = null)
+        public static bool? OpenChgReserveDialog(ReserveData Data, int epgInfoOpenMode = 0, RecSettingData setInfo = null)
         {
             try
             {
@@ -791,24 +809,24 @@ namespace EpgTimer
             return null;
         }
 
-        public static bool? OpenSearchEpgDialog()
+        public static bool? OpenSearchEpgDialog(string searchWord = null)
         {
-            return OpenEpgAutoAddDialog(null, AutoAddMode.Find);
+            return OpenEpgAutoAddDialog(null, AutoAddMode.Find, searchWord);
         }
-        public static bool? OpenAddEpgAutoAddDialog()
+        public static bool? OpenAddEpgAutoAddDialog(string searchWord = null)
         {
-            return OpenEpgAutoAddDialog(null, AutoAddMode.NewAdd);
+            return OpenEpgAutoAddDialog(null, AutoAddMode.NewAdd, searchWord);
         }
         public static bool? OpenChangeEpgAutoAddDialog(EpgAutoAddData Data)
         {
             if (SearchWindow.ChangeDataLastUsedWindow(Data) != null) return true;
             return OpenEpgAutoAddDialog(Data, AutoAddMode.Change);
         }
-        private static bool? OpenEpgAutoAddDialog(EpgAutoAddData Data, AutoAddMode mode)
+        private static bool? OpenEpgAutoAddDialog(EpgAutoAddData Data, AutoAddMode mode, string searchWord = null)
         {
             try
             {
-                new SearchWindow(Data, mode).Show();
+                new SearchWindow(Data, mode, searchWord).Show();
                 return true;
             }
             catch (Exception ex) { MessageBox.Show(ex.ToString()); }
@@ -839,14 +857,19 @@ namespace EpgTimer
             }
             catch (Exception ex) { MessageBox.Show(ex.ToString()); }
         }
-        public static EpgSearchKeyInfo SendAutoAddKey(IBasicPgInfo item, bool NotToggle = false, EpgSearchKeyInfo key = null)
+        public static EpgSearchKeyInfo SendAutoAddKey(IBasicPgInfo item, bool NotToggle = false, EpgSearchKeyInfo refkey = null)
         {
-            key = key ?? Settings.Instance.SearchPresetList[0].Data.DeepClone();
+            var key = (refkey ?? Settings.Instance.SearchPresetList[0].Data).DeepClone();
             key.regExpFlag = 0;
+            if (refkey == null)
+            {
+                key.notContetFlag = 0;
+                key.contentList.Clear();
+            }
             if (item == null) return key;
 
             key.andKey = TrimEpgKeyword(item.DataTitle, NotToggle);
-            key.serviceList = ((Int64)item.Create64Key()).IntoList();
+            key.serviceList = ((long)item.Create64Key()).IntoList();
 
             var eventInfo = item as EpgEventInfo;
             if (eventInfo != null && Settings.Instance.MenuSet.SetJunreToAutoAdd == true)
@@ -930,13 +953,13 @@ namespace EpgTimer
             return null;
         }
 
-        public static EpgEventInfo GetPgInfoUid(UInt64 uid, Dictionary<UInt64, EpgEventInfo> currentList = null)
+        public static EpgEventInfo GetPgInfoUid(ulong uid, Dictionary<ulong, EpgEventInfo> currentList = null)
         {
             EpgEventInfo data;
             (currentList ?? CommonManager.Instance.DB.EventUIDList).TryGetValue(uid, out data);
             return data;
         }
-        public static EpgEventInfo GetPgInfoUidAll(UInt64 uid)
+        public static EpgEventInfo GetPgInfoUidAll(ulong uid)
         {
             //EPGが読み込まれているときなど
             EpgEventInfo hit = GetPgInfoUid(uid);
@@ -954,7 +977,7 @@ namespace EpgTimer
         public static EpgEventInfo GetPgInfoLikeThat(IAutoAddTargetData trg, IEnumerable<EpgServiceEventInfo> currentList = null, IEnumerable<EpgEventInfo> currentEventList = null)
         {
             var eventList = new List<EpgEventInfo>();
-            UInt64 key = trg.Create64Key();
+            ulong key = trg.Create64Key();
             if (currentEventList != null)
             {
                 eventList = currentEventList.Where(info => info.Create64Key() == key).ToList();
@@ -978,9 +1001,9 @@ namespace EpgTimer
             EpgEventInfo hit = null;
             
             //イベントベースで見つかるならそれを返す
-            if ((UInt16)trg.Create64PgKey() != 0xFFFF)
+            if ((ushort)trg.Create64PgKey() != 0xFFFF)
             {
-                UInt64 PgUID = trg.CurrentPgUID();
+                ulong PgUID = trg.CurrentPgUID();
                 hit = eventList.Find(pg => pg.CurrentPgUID() == PgUID);
                 if (hit != null) return hit;
             }
@@ -1051,19 +1074,6 @@ namespace EpgTimer
 
             list = list.Distinct().ToList();
             return IsEnabled == null ? list : list.FindAll(data => data.IsEnabled == IsEnabled);
-        }
-
-        public static RecFileInfo GetRecFileInfo(IAutoAddTargetData data)
-        {
-            List<RecFileInfo> list = GetRecFileInfoList(data);
-            return list == null ? null : list.FirstOrDefault();
-        }
-        public static List<RecFileInfo> GetRecFileInfoList(IAutoAddTargetData data)
-        {
-            if (data == null) return null;
-            List<RecFileInfo> list = null;
-            CommonManager.Instance.DB.RecFileUIDList.TryGetValue(data.CurrentPgUID(), out list);
-            return list ?? new List<RecFileInfo>();
         }
 
         public static void JumpTab(object target, CtxmCode trg_code)

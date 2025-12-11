@@ -1,0 +1,132 @@
+-- vim:set ft=lua:
+dofile(mg.script_name:gsub('[^\\/]*$','')..'util.lua')
+
+ct=CreateContentBuilder(GZIP_THRESHOLD_BYTE)
+ct:Append(DOCTYPE_HTML4_STRICT..[=[
+<html lang="ja">
+<head>
+]=]..DefaultHeadContents()..[=[
+<title>設定/基本設定 - EDCB</title>
+</head>
+<body>
+<h1>設定/基本設定</h1>
+<div id="main">
+]=])
+
+commonIni='Common.ini'
+viewAppIni='ViewApp.ini'
+function GetViewAppCmdOpt()
+  return {
+    bon=edcb.GetPrivateProfile('APP_CMD_OPT','Bon','-d',viewAppIni),
+    min=edcb.GetPrivateProfile('APP_CMD_OPT','Min','-min',viewAppIni),
+    viewOff=edcb.GetPrivateProfile('APP_CMD_OPT','ViewOff','-noview',viewAppIni),
+    onid=edcb.GetPrivateProfile('APP_CMD_OPT','ONID','-nid',viewAppIni),
+    tsid=edcb.GetPrivateProfile('APP_CMD_OPT','TSID','-tsid',viewAppIni),
+    sid=edcb.GetPrivateProfile('APP_CMD_OPT','SID','-sid',viewAppIni),
+  }
+end
+
+defaultRecExePath=WIN32 and PathAppend(EdcbModulePath(),'EpgDataCap_Bon.exe') or ''
+post=AssertPost()
+if post and not ALLOW_SETTING then
+  post=nil
+  ct:Append('<div id="result">変更は許可されていません</div>\n')
+end
+if post then
+  item=mg.get_var(post,'dataSavePath') or ''
+  if IsEqualPath(item,PathAppend(EdcbModulePath(),'Setting')) then
+    --既定値なので記録しない
+    edcb.WritePrivateProfile('SET','DataSavePath',nil,commonIni)
+  elseif item:find('^[^%c'..(WIN32 and '*?"<>|' or '')..']+$') then
+    ff=EdcbFindFilePlain(item)
+    if ff and ff.isdir then
+      edcb.WritePrivateProfile('SET','DataSavePath',item,commonIni)
+    end
+  end
+  item=mg.get_var(post,'recExePath') or ''
+  if IsEqualPath(item,defaultRecExePath) then
+    --既定値なので記録しない
+    edcb.WritePrivateProfile('SET','RecExePath',nil,commonIni)
+  elseif item:find('^[^%c'..(WIN32 and '*?"<>|' or '')..']+$') then
+    ff=EdcbFindFilePlain(item)
+    if ff and not ff.isdir then
+      edcb.WritePrivateProfile('SET','RecExePath',item,commonIni)
+    end
+  end
+  item=mg.get_var(post,'recInfoFolder') or ''
+  if item=='' then
+    --既定値なので記録しない
+    edcb.WritePrivateProfile('SET','RecInfoFolder',nil,commonIni)
+  elseif item:find('^[^%c'..(WIN32 and '*?"<>|' or '')..']+$') then
+    ff=EdcbFindFilePlain(item)
+    if ff and ff.isdir then
+      edcb.WritePrivateProfile('SET','RecInfoFolder',item,commonIni)
+    end
+  end
+  if WIN32 then
+    cmdOpt=GetViewAppCmdOpt()
+    item=mg.get_var(post,'cmdOptBon') or ''
+    if item~=cmdOpt.bon and not item:find('%c') then
+      edcb.WritePrivateProfile('APP_CMD_OPT','Bon',item,viewAppIni)
+    end
+    item=mg.get_var(post,'cmdOptMin') or ''
+    if item~=cmdOpt.min and not item:find('%c') then
+      edcb.WritePrivateProfile('APP_CMD_OPT','Min',item,viewAppIni)
+    end
+    item=mg.get_var(post,'cmdOptViewOff') or ''
+    if item~=cmdOpt.viewOff and not item:find('%c') then
+      edcb.WritePrivateProfile('APP_CMD_OPT','ViewOff',item,viewAppIni)
+    end
+    item=mg.get_var(post,'cmdOptONID') or ''
+    if item~=cmdOpt.onid and not item:find('%c') then
+      edcb.WritePrivateProfile('APP_CMD_OPT','ONID',item,viewAppIni)
+    end
+    item=mg.get_var(post,'cmdOptTSID') or ''
+    if item~=cmdOpt.tsid and not item:find('%c') then
+      edcb.WritePrivateProfile('APP_CMD_OPT','TSID',item,viewAppIni)
+    end
+    item=mg.get_var(post,'cmdOptSID') or ''
+    if item~=cmdOpt.sid and not item:find('%c') then
+      edcb.WritePrivateProfile('APP_CMD_OPT','SID',item,viewAppIni)
+    end
+  end
+  ct:Append('<div id="result">変更しました</div>\n')
+  edcb.ReloadSetting(false)
+end
+
+edcb.htmlEscape=15
+dataSavePath=EdcbSettingPath()
+recExePath=edcb.GetPrivateProfile('SET','RecExePath',defaultRecExePath,commonIni)
+recInfoFolder=edcb.GetPrivateProfile('SET','RecInfoFolder','',commonIni)
+cmdOpt=GetViewAppCmdOpt()
+
+ct:Append([=[
+<form method="POST" action="setting_basic.html"><div>
+  <input type="hidden" name="ctok" value="]=]..CsrfToken()..[=[">
+  設定関係保存フォルダ<br>
+  <input type="text" name="dataSavePath" value="]=]..dataSavePath..[=[" style="width:95%"><br>
+  録画用アプリのパス]=]..(WIN32 and '' or ' (※未指定時はEpgTimerSrvと同じ場所のEpgDataCap_Bonを使います。)')..[=[<br>
+  <input type="text" name="recExePath" value="]=]..recExePath..[=[" style="width:95%"><br>
+  <div class="]=]..(WIN32 and '' or 'inact-setting')..[=[">
+    コマンドライン引数 <input type="text" name="cmdOptBon" value="]=]..cmdOpt.bon..[=[" size="40"> {BonDriver}
+    <div class="sub-setting">
+      最小化 <input type="text" name="cmdOptMin" value="]=]..cmdOpt.min..[=[" size="20"><br>
+      非視聴時 <input type="text" name="cmdOptViewOff" value="]=]..cmdOpt.viewOff..[=[" size="20"><br>
+      <input type="text" name="cmdOptONID" value="]=]..cmdOpt.onid..[=[" size="20"> {ONID}<br>
+      <input type="text" name="cmdOptTSID" value="]=]..cmdOpt.tsid..[=[" size="20"> {TSID}<br>
+      <input type="text" name="cmdOptSID" value="]=]..cmdOpt.sid..[=[" size="20"> {SID}
+    </div>
+  </div>
+  録画情報保存フォルダ (※未指定時は録画ファイルと同じ場所に保存します。)<br>
+  <input type="text" name="recInfoFolder" value="]=]..recInfoFolder..[=[" style="width:95%"><br>
+  <button type="submit">変更</button>
+</div></form>
+</div>
+<div id="footer">
+  <a href="setting.html">設定メニュー</a>
+</div>
+</body>
+</html>
+]=])
+ct:Finish()
+mg.write(ct:Pop(Response(200,'text/html','utf-8',ct.len,ct.gzip)..'\r\n'))
