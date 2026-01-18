@@ -79,8 +79,10 @@ namespace EpgTimer.Setting
             bxr.targetBoxAllowDoubleClick(bxr.TargetBox, (sender, e) => button_rec_open.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)));
 
             // バージョン文字列を表示
-            stackpanel_versionInfo.Visibility = App.VERSION_TEXT == "" ? Visibility.Hidden : Visibility.Visible;
-            textBlock_versionText.Text = ((AssemblyInformationalVersionAttribute)Attribute.GetCustomAttribute(Assembly.GetEntryAssembly(), typeof(AssemblyInformationalVersionAttribute))).InformationalVersion;
+            var entry = Assembly.GetEntryAssembly();
+            var attr = entry != null ? Attribute.GetCustomAttribute(entry, typeof(AssemblyInformationalVersionAttribute)) as AssemblyInformationalVersionAttribute : null;
+            textBlock_versionText.Text = attr?.InformationalVersion ?? App.VERSION_TEXT ?? "";
+            stackpanel_versionInfo.Visibility = string.IsNullOrEmpty(textBlock_versionText.Text) ? Visibility.Hidden : Visibility.Visible;
 
             if (CommonManager.Instance.NWMode == false)
             {

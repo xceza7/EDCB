@@ -548,7 +548,6 @@
     <Compile Include="Properties\AssemblyInfo.cs">
       <SubType>Code</SubType>
     </Compile>
-    <None Include="app.config" />
     <None Include="App.manifest" />
     <AppDesigner Include="Properties\" />
     <Page Include="Setting\SetPicUpCustomWindow.xaml">
